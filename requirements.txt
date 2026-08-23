@@ -1,0 +1,7 @@
+telethon
+fastapi
+uvicorn
+sqlalchemy
+aiosqlite
+python-multipart
+pydantic

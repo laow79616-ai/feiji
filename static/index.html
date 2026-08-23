@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TG 水军管理系统</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #0b1120; color: #e2e8f0; }
+    .card { background: #111827; border: 1px solid #1f2937; }
+    .nav-item.active { background: #2563eb; color: white; }
+    .nav-item:not(.active):hover { background: #1f2937; }
+    input, textarea, select { background: #0f172a; border: 1px solid #334155; color: #e2e8f0; }
+    .btn-primary { background: #2563eb; }
+    .btn-success { background: #059669; }
+    .chat-me { background: #2563eb; border-radius: 12px 12px 4px 12px; }
+    .chat-other { background: #1f2937; border-radius: 12px 12px 12px 4px; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="border-b border-gray-800 bg-[#0b1120] sticky top-0 z-50">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center">✈️</div>
+      <div>
+        <h1 class="text-lg font-bold">TG 水军管理系统</h1>
+        <p class="text-xs text-gray-500">每条 IP 线路最多 10 个号</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="max-w-6xl mx-auto px-4 py-4">
+    <div class="flex gap-2 mb-4 flex-wrap">
+      <button onclick="switchTab('accounts')" id="tab-accounts" class="nav-item active px-3 py-1.5 rounded-lg text-sm">水军管理</button>
+      <button onclick="switchTab('add')" id="tab-add" class="nav-item px-3 py-1.5 rounded-lg text-sm">增加水军</button>
+      <button onclick="switchTab('apis')" id="tab-apis" class="nav-item px-3 py-1.5 rounded-lg text-sm">API 池</button>
+      <button onclick="switchTab('proxies')" id="tab-proxies" class="nav-item px-3 py-1.5 rounded-lg text-sm">代理池</button>
+      <button onclick="switchTab('targets')" id="tab-targets" class="nav-item px-3 py-1.5 rounded-lg text-sm">目标</button>
+      <button onclick="switchTab('join')" id="tab-join" class="nav-item px-3 py-1.5 rounded-lg text-sm">一键加入</button>
+    </div>
+
+    <!-- 水军管理：按代理分组 -->
+    <div id="panel-accounts" class="panel space-y-4">
+      <div class="flex justify-between items-center">
+        <h2 class="font-semibold">线路分组（每条 IP 最多 10 号）</h2>
+        <button onclick="loadAccounts()" class="text-xs px-3 py-1.5 bg-gray-800 rounded">刷新</button>
+      </div>
+      <div id="groupList" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+
+      <!-- 资料 -->
+      <div id="profileSection" class="card rounded-xl p-4 hidden">
+        <div class="flex justify-between items-center mb-3">
+          <h2 class="font-semibold" id="profileTitle">修改资料</h2>
+          <button onclick="closeProfile()" class="text-xs px-2 py-1 bg-gray-700 rounded">关闭</button>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+          <input id="pName" placeholder="昵称" class="px-3 py-2 rounded text-sm">
+          <input id="pUsername" placeholder="用户名(可选)" class="px-3 py-2 rounded text-sm">
+        </div>
+        <textarea id="pAbout" placeholder="简介" rows="2" class="w-full px-3 py-2 rounded text-sm mb-3"></textarea>
+        <input type="file" id="pPhoto" accept="image/*" class="w-full text-sm mb-3">
+        <div class="flex gap-2">
+          <button onclick="saveProfile()" class="btn-success px-4 py-2 rounded text-sm">保存资料</button>
+          <button onclick="upPhoto()" class="btn-primary px-4 py-2 rounded text-sm">上传头像</button>
+        </div>
+        <p id="pMsg" class="text-xs mt-2 text-green-400"></p>
+      </div>
+
+      <!-- 对话 -->
+      <div id="dialogSection" class="card rounded-xl p-4 hidden">
+        <div class="flex justify-between items-center mb-3">
+          <h2 class="font-semibold" id="accountTitle">对话</h2>
+          <button onclick="closeDialogs()" class="text-xs px-2 py-1 bg-gray-700 rounded">关闭</button>
+        </div>
+        <input id="searchDialog" placeholder="搜索..." oninput="filterDialogs()" class="w-full px-3 py-2 rounded text-sm mb-3">
+        <div id="dialogList" class="space-y-1 max-h-52 overflow-y-auto text-sm"></div>
+      </div>
+
+      <!-- 消息 -->
+      <div id="msgSection" class="card rounded-xl p-4 hidden">
+        <div class="flex justify-between items-center mb-3">
+          <h2 class="font-semibold truncate" id="chatTitle">消息</h2>
+          <button onclick="closeMessages()" class="text-xs px-2 py-1 bg-red-800 rounded">关闭聊天</button>
+        </div>
+        <div id="msgList" class="space-y-2 max-h-80 overflow-y-auto mb-3 text-sm"></div>
+        <div class="flex gap-2">
+          <input id="msgInput" placeholder="输入消息..." class="flex-1 px-3 py-2 rounded text-sm" onkeydown="if(event.key==='Enter')sendMsg()">
+          <button onclick="sendMsg()" class="btn-primary px-4 py-2 rounded text-sm">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 其他面板 -->
+    <div id="panel-add" class="panel hidden">
+      <div class="card rounded-xl p-5 mb-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+          <input id="phone" placeholder="手机号 +60/+86" class="px-3 py-2 rounded">
+          <input id="name" placeholder="备注" class="px-3 py-2 rounded">
+          <select id="selectApi" class="px-3 py-2 rounded"></select>
+          <select id="selectProxy" class="px-3 py-2 rounded"></select>
+        </div>
+        <button onclick="addAccount()" class="btn-primary px-5 py-2 rounded">发送验证码</button>
+        <p id="addMsg" class="mt-2 text-sm text-green-400"></p>
+      </div>
+      <div class="card rounded-xl p-5">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+          <input id="verifyPhone" placeholder="手机号" class="px-3 py-2 rounded">
+          <input id="code" placeholder="验证码" class="px-3 py-2 rounded">
+          <input id="password" placeholder="两步密码(可选)" class="px-3 py-2 rounded">
+        </div>
+        <button onclick="verifyCode()" class="btn-success px-5 py-2 rounded">确认登录</button>
+        <p id="verifyMsg" class="mt-2 text-sm text-green-400"></p>
+      </div>
+    </div>
+
+    <div id="panel-apis" class="panel hidden">
+      <div class="card rounded-xl p-5 mb-4">
+        <p class="text-xs text-gray-400 mb-2">支持：备注|api_id|api_hash 或 api_id-api_hash</p>
+        <textarea id="apiBatchText" rows="4" class="w-full px-3 py-2 rounded text-sm mb-3"></textarea>
+        <button onclick="batchAddApis()" class="btn-primary px-5 py-2 rounded">批量添加</button>
+        <p id="apiMsg" class="mt-2 text-sm text-green-400"></p>
+      </div>
+      <div class="card rounded-xl p-5"><div id="apiList" class="space-y-2 text-sm"></div></div>
+    </div>
+
+    <div id="panel-proxies" class="panel hidden">
+      <div class="card rounded-xl p-5 mb-4">
+        <textarea id="proxyBatchText" rows="4" class="w-full px-3 py-2 rounded text-sm mb-3"></textarea>
+        <button onclick="batchAddProxies()" class="btn-primary px-5 py-2 rounded">批量添加</button>
+        <p id="proxyMsg" class="mt-2 text-sm text-green-400"></p>
+      </div>
+      <div class="card rounded-xl p-5"><div id="proxyList" class="space-y-2 text-sm"></div></div>
+    </div>
+
+    <div id="panel-targets" class="panel hidden">
+      <div class="card rounded-xl p-5 mb-4">
+        <div class="flex gap-3 mb-3">
+          <input id="targetName" placeholder="备注" class="px-3 py-2 rounded flex-1">
+          <input id="targetLink" placeholder="链接" class="px-3 py-2 rounded flex-[2]">
+        </div>
+        <button onclick="addTarget()" class="btn-primary px-5 py-2 rounded">添加</button>
+        <p id="targetMsg" class="mt-2 text-sm text-green-400"></p>
+      </div>
+      <div class="card rounded-xl p-5"><div id="targetList" class="space-y-2 text-sm"></div></div>
+    </div>
+
+    <div id="panel-join" class="panel hidden">
+      <div class="card rounded-xl p-5">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <select id="joinAccounts" multiple class="h-36 px-2 py-1 rounded text-sm"></select>
+          <select id="joinTargets" multiple class="h-36 px-2 py-1 rounded text-sm"></select>
+        </div>
+        <button onclick="doJoin()" class="btn-primary px-6 py-2 rounded">一键加入</button>
+        <pre id="joinResult" class="mt-4 text-xs bg-black/30 p-3 rounded max-h-48 overflow-auto"></pre>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentSession = null, currentChatId = null, allDialogs = [], profileSession = null;
+
+    function switchTab(name) {
+      document.querySelectorAll('.panel').forEach(p => p.classList.add('hidden'));
+      document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+      document.getElementById('panel-' + name).classList.remove('hidden');
+      document.getElementById('tab-' + name).classList.add('active');
+      if (name === 'accounts') loadAccounts();
+      if (name === 'apis') loadApis();
+      if (name === 'proxies') loadProxies();
+      if (name === 'targets' || name === 'join') { loadTargets(); loadAccounts(); }
+      if (name === 'add') { loadApis(); loadProxies(); }
+    }
+
+    function closeDialogs() {
+      currentSession = null; currentChatId = null; allDialogs = [];
+      document.getElementById('dialogSection').classList.add('hidden');
+      document.getElementById('msgSection').classList.add('hidden');
+    }
+    function closeMessages() {
+      currentChatId = null;
+      document.getElementById('msgSection').classList.add('hidden');
+      document.getElementById('msgList').innerHTML = '';
+    }
+    function closeProfile() {
+      profileSession = null;
+      document.getElementById('profileSection').classList.add('hidden');
+    }
+
+    async function loadAccounts() {
+      const [accRes, proxyRes] = await Promise.all([
+        fetch('/accounts/'),
+        fetch('/pools/proxies')
+      ]);
+      const accounts = await accRes.json();
+      const proxies = await proxyRes.json();
+
+      // 按 proxy_name 分组
+      const groups = {};
+      accounts.forEach(a => {
+        const key = a.proxy_name || '未分配代理';
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(a);
+      });
+
+      // 没有账号的代理也显示
+      proxies.forEach(p => {
+        if (!groups[p.name]) groups[p.name] = [];
+      });
+
+      const box = document.getElementById('groupList');
+      const keys = Object.keys(groups);
+      if (!keys.length) {
+        box.innerHTML = '<p class="text-gray-500">暂无数据</p>';
+        return;
+      }
+
+      box.innerHTML = keys.map(proxyName => {
+        const list = groups[proxyName];
+        const count = list.length;
+        const remain = Math.max(0, 10 - count);
+        const online = list.filter(a => a.is_online).length;
+
+        return `
+          <div class="card rounded-xl p-4">
+            <div class="flex justify-between items-start mb-3">
+              <div>
+                <div class="font-semibold text-sm">${proxyName}</div>
+                <div class="text-xs text-gray-400 mt-0.5">${count}/10 号 · 在线 ${online} · 剩余 ${remain}</div>
+              </div>
+              <span class="text-xs px-2 py-0.5 rounded ${remain>0?'bg-green-900 text-green-300':'bg-red-900 text-red-300'}">${remain>0?'可添加':'已满'}</span>
+            </div>
+            <div class="space-y-2 max-h-64 overflow-y-auto">
+              ${list.length ? list.map(a => `
+                <div class="bg-[#0f172a] rounded-lg px-2.5 py-2 flex items-center justify-between gap-2">
+                  <div class="min-w-0">
+                    <div class="text-sm truncate">${a.name || a.phone}</div>
+                    <div class="text-xs ${a.is_online?'text-green-400':'text-red-400'}">${a.is_online?'在线':'离线'}</div>
+                  </div>
+                  <div class="flex gap-1 shrink-0">
+                    <button onclick="selectAccount('${a.session_name}','${(a.name||a.phone).replace(/'/g,'')}')" class="text-xs px-1.5 py-0.5 bg-blue-700 rounded">聊</button>
+                    <button onclick="openProfile('${a.session_name}','${(a.name||a.phone).replace(/'/g,'')}')" class="text-xs px-1.5 py-0.5 bg-gray-700 rounded">资</button>
+                    <button onclick="deleteAccount(${a.id})" class="text-xs px-1.5 py-0.5 bg-red-800 rounded">删</button>
+                  </div>
+                </div>
+              `).join('') : '<p class="text-xs text-gray-500">暂无水军号</p>'}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // 填充一键加入选项
+      const opts = accounts.map(a => `<option value="${a.session_name}">${a.name||a.phone}</option>`).join('');
+      const joinEl = document.getElementById('joinAccounts');
+      if (joinEl) joinEl.innerHTML = opts;
+    }
+
+    async function deleteAccount(id) {
+      if (!confirm('确定删除？')) return;
+      const res = await fetch('/accounts/' + id, { method: 'DELETE' });
+      if (res.ok) loadAccounts();
+      else alert((await res.json()).detail || '删除失败');
+    }
+
+    function openProfile(session, name) {
+      profileSession = session;
+      document.getElementById('profileTitle').textContent = '修改资料 - ' + name;
+      document.getElementById('profileSection').classList.remove('hidden');
+      document.getElementById('pName').value = '';
+      document.getElementById('pAbout').value = '';
+      document.getElementById('pMsg').textContent = '';
+    }
+
+    async function saveProfile() {
+      if (!profileSession) return;
+      try { await fetch('/accounts/' + profileSession + '/reconnect', {method:'POST'}); } catch(e) {}
+      const res = await fetch('/chat/profile/update', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          session_name: profileSession,
+          first_name: document.getElementById('pName').value.trim(),
+          about: document.getElementById('pAbout').value.trim()
+        })
+      });
+      document.getElementById('pMsg').textContent = res.ok ? '已更新' : '失败';
+    }
+
+    async function upPhoto() {
+      if (!profileSession) return;
+      const f = document.getElementById('pPhoto').files[0];
+      if (!f) return alert('请选择图片');
+      try { await fetch('/accounts/' + profileSession + '/reconnect', {method:'POST'}); } catch(e) {}
+      const form = new FormData();
+      form.append('session_name', profileSession);
+      form.append('file', f);
+      const res = await fetch('/chat/profile/photo', { method: 'POST', body: form });
+      document.getElementById('pMsg').textContent = res.ok ? '头像已更新' : '失败';
+    }
+
+    async function selectAccount(session, name) {
+      currentSession = session; currentChatId = null;
+      document.getElementById('accountTitle').textContent = name + ' 的对话';
+      document.getElementById('dialogSection').classList.remove('hidden');
+      document.getElementById('msgSection').classList.add('hidden');
+      document.getElementById('dialogList').innerHTML = '<p class="text-gray-500 text-sm">加载中...</p>';
+      try { await fetch('/accounts/' + session + '/reconnect', {method:'POST'}); } catch(e) {}
+      const res = await fetch('/chat/dialogs/' + session);
+      const data = await res.json();
+      if (data.detail) {
+        document.getElementById('dialogList').innerHTML = '<p class="text-red-400 text-sm">' + data.detail + '</p>';
+        return;
+      }
+      allDialogs = data.dialogs || [];
+      renderDialogs(allDialogs);
+    }
+
+    function renderDialogs(list) {
+      const box = document.getElementById('dialogList');
+      if (!list.length) { box.innerHTML = '<p class="text-gray-500 text-sm">暂无对话</p>'; return; }
+      box.innerHTML = list.map(d => `
+        <div class="dialog-item cursor-pointer hover:bg-[#1e293b] rounded-lg px-3 py-2" data-id="${d.id}" data-name="${String(d.name).replace(/"/g,'&quot;')}">
+          <div class="font-medium truncate">${d.name}</div>
+          <div class="text-xs text-gray-500">${d.is_group||d.is_channel?'群组/频道':'私聊'}${d.unread?' · '+d.unread+'未读':''}</div>
+        </div>
+      `).join('');
+      document.querySelectorAll('.dialog-item').forEach(el => {
+        el.onclick = () => openChat(parseInt(el.dataset.id), el.dataset.name);
+      });
+    }
+
+    function filterDialogs() {
+      const kw = document.getElementById('searchDialog').value.trim().toLowerCase();
+      if (!kw) return renderDialogs(allDialogs);
+      renderDialogs(allDialogs.filter(d => d.name.toLowerCase().includes(kw)));
+    }
+
+    async function openChat(chatId, name) {
+      currentChatId = chatId;
+      document.getElementById('chatTitle').textContent = name;
+      document.getElementById('msgSection').classList.remove('hidden');
+      const box = document.getElementById('msgList');
+      box.innerHTML = '<p class="text-gray-500 text-sm">加载中...</p>';
+      try {
+        const res = await fetch('/chat/messages/' + currentSession + '/' + chatId);
+        const data = await res.json();
+        if (data.detail) { box.innerHTML = '<p class="text-red-400 text-sm">' + data.detail + '</p>'; return; }
+        if (!data.messages?.length) { box.innerHTML = '<p class="text-gray-500 text-sm">暂无消息</p>'; return; }
+        box.innerHTML = data.messages.map(m => `
+          <div class="flex ${m.out?'justify-end':'justify-start'}">
+            <div class="max-w-[85%] px-3 py-1.5 text-sm ${m.out?'chat-me':'chat-other'}">${m.text||'[媒体]'}</div>
+          </div>
+        `).join('');
+        box.scrollTop = box.scrollHeight;
+      } catch(e) { box.innerHTML = '<p class="text-red-400 text-sm">加载失败</p>'; }
+    }
+
+    async function sendMsg() {
+      const text = document.getElementById('msgInput').value.trim();
+      if (!text || !currentSession || !currentChatId) return alert('请先选择对话');
+      const res = await fetch('/chat/send', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ session_name: currentSession, chat_id: currentChatId, text })
+      });
+      if (res.ok) {
+        document.getElementById('msgInput').value = '';
+        openChat(currentChatId, document.getElementById('chatTitle').textContent);
+      } else alert((await res.json()).detail || '发送失败');
+    }
+
+    async function addAccount() {
+      const phone = document.getElementById('phone').value.trim();
+      const name = document.getElementById('name').value.trim();
+      const api_id = parseInt(document.getElementById('selectApi').value);
+      const proxy_id = parseInt(document.getElementById('selectProxy').value);
+      if (!phone || !api_id || !proxy_id) return alert('请填写完整');
+      const res = await fetch('/accounts/add', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({phone, name, api_id, proxy_id})
+      });
+      const d = await res.json();
+      document.getElementById('addMsg').textContent = res.ok ? '验证码已发送' : (d.detail || JSON.stringify(d));
+      if (res.ok) document.getElementById('verifyPhone').value = phone;
+    }
+
+    async function verifyCode() {
+      const phone = document.getElementById('verifyPhone').value.trim();
+      const code = document.getElementById('code').value.trim();
+      const password = document.getElementById('password').value.trim() || null;
+      const res = await fetch('/accounts/verify', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({phone, code, password})
+      });
+      const d = await res.json();
+      document.getElementById('verifyMsg').textContent = res.ok ? '登录成功' : (d.detail || JSON.stringify(d));
+      if (res.ok) loadAccounts();
+    }
+
+    async function loadApis() {
+      const list = await (await fetch('/pools/apis')).json();
+      document.getElementById('apiList').innerHTML = list.map(a => 
+        `<div class="bg-[#0f172a] rounded px-3 py-2">${a.name} · 剩余${a.remain}</div>`).join('') || '<p class="text-gray-500">暂无</p>';
+      const sel = document.getElementById('selectApi');
+      if (sel) sel.innerHTML = list.filter(a=>a.remain>0).map(a=>`<option value="${a.id}">${a.name}（剩${a.remain}）</option>`).join('');
+    }
+
+    async function batchAddApis() {
+      const text = document.getElementById('apiBatchText').value.trim();
+      if (!text) return;
+      const d = await (await fetch('/pools/apis/batch', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text})
+      })).json();
+      document.getElementById('apiMsg').textContent = `成功${d.success} 失败${d.failed_count}`;
+      loadApis();
+    }
+
+    async function loadProxies() {
+      const list = await (await fetch('/pools/proxies')).json();
+      document.getElementById('proxyList').innerHTML = list.map(p => 
+        `<div class="bg-[#0f172a] rounded px-3 py-2">${p.name} · ${p.proxy_str.split(':')[0]} · 剩${p.remain}</div>`).join('') || '<p class="text-gray-500">暂无</p>';
+      const sel = document.getElementById('selectProxy');
+      if (sel) sel.innerHTML = list.filter(p=>p.remain>0).map(p=>`<option value="${p.id}">${p.name}（剩${p.remain}）</option>`).join('');
+    }
+
+    async function batchAddProxies() {
+      const text = document.getElementById('proxyBatchText').value.trim();
+      if (!text) return;
+      const d = await (await fetch('/pools/proxies/batch', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text})
+      })).json();
+      document.getElementById('proxyMsg').textContent = `成功${d.success} 失败${d.failed_count}`;
+      loadProxies();
+    }
+
+    async function addTarget() {
+      const name = document.getElementById('targetName').value.trim();
+      const link = document.getElementById('targetLink').value.trim();
+      if (!name || !link) return;
+      await fetch('/targets/', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,link})});
+      document.getElementById('targetMsg').textContent = '已添加';
+      loadTargets();
+    }
+
+    async function loadTargets() {
+      const list = await (await fetch('/targets/')).json();
+      document.getElementById('targetList').innerHTML = list.map(t => 
+        `<div class="bg-[#0f172a] rounded px-3 py-2">${t.name}<div class="text-xs text-gray-500">${t.link}</div></div>`).join('') || '<p class="text-gray-500">暂无</p>';
+      const sel = document.getElementById('joinTargets');
+      if (sel) sel.innerHTML = list.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+    }
+
+    async function doJoin() {
+      const accounts = [...document.getElementById('joinAccounts').selectedOptions].map(o=>o.value);
+      const targetIds = [...document.getElementById('joinTargets').selectedOptions].map(o=>parseInt(o.value));
+      if (!accounts.length || !targetIds.length) return alert('请选择');
+      const d = await (await fetch('/targets/join', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({session_names:accounts, target_ids:targetIds})
+      })).json();
+      document.getElementById('joinResult').textContent = JSON.stringify(d, null, 2);
+    }
+
+    loadAccounts();
+  </script>
+</body>
+</html>

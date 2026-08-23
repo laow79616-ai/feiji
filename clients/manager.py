@@ -1,0 +1,252 @@
+import os
+import asyncio
+import re
+from typing import Dict, Optional, List
+from telethon import TelegramClient, events
+from telethon.tl.functions.channels import JoinChannelRequest
+from telethon.tl.functions.messages import ImportChatInviteRequest
+from telethon.errors import (
+    SessionPasswordNeededError,
+    FloodWaitError,
+    UserAlreadyParticipantError,
+    InviteHashExpiredError,
+    InviteHashInvalidError
+)
+from config import API_ID, API_HASH, SESSIONS_DIR
+
+clients: Dict[str, TelegramClient] = {}
+code_cache: Dict[str, List[dict]] = {}
+
+
+def parse_proxy(proxy_str: str):
+    if not proxy_str:
+        return None
+    parts = proxy_str.strip().split(":")
+    if len(parts) == 4:
+        ip, port, user, password = parts
+        return {
+            'proxy_type': 'socks5',
+            'addr': ip,
+            'port': int(port),
+            'username': user,
+            'password': password,
+            'rdns': True
+        }
+    elif len(parts) == 2:
+        ip, port = parts
+        return {
+            'proxy_type': 'socks5',
+            'addr': ip,
+            'port': int(port),
+            'rdns': True
+        }
+    return None
+
+
+class ClientManager:
+
+    @staticmethod
+    def get_session_path(session_name: str) -> str:
+        return os.path.join(SESSIONS_DIR, f"{session_name}.session")
+
+    @classmethod
+    async def create_client(cls, session_name: str, proxy_str: str = None) -> TelegramClient:
+        session_path = cls.get_session_path(session_name)
+        proxy = parse_proxy(proxy_str)
+        client = TelegramClient(session_path, API_ID, API_HASH, proxy=proxy)
+        return client
+
+    @classmethod
+    async def start_client(cls, session_name: str, phone: str = None, proxy_str: str = None) -> TelegramClient:
+        if session_name in clients and clients[session_name].is_connected():
+            return clients[session_name]
+        client = await cls.create_client(session_name, proxy_str)
+        await client.connect()
+        if not await client.is_user_authorized():
+            if not phone:
+                raise ValueError("账号未登录，需要提供手机号")
+            await client.send_code_request(phone)
+            clients[session_name] = client
+            return client
+        clients[session_name] = client
+        cls._register_handlers(client, session_name)
+        return client
+
+    @classmethod
+    def _register_handlers(cls, client: TelegramClient, session_name: str):
+        @client.on(events.NewMessage(incoming=True))
+        async def handler(event):
+            text = event.message.message or ""
+            codes = re.findall(r'\b\d{4,8}\b', text)
+            if codes:
+                code_info = {
+                    "code": codes[0],
+                    "from": event.sender_id,
+                    "text": text[:200],
+                    "time": event.message.date.isoformat()
+                }
+                if session_name not in code_cache:
+                    code_cache[session_name] = []
+                code_cache[session_name].insert(0, code_info)
+                code_cache[session_name] = code_cache[session_name][:20]
+                print(f"[{session_name}] 收到验证码: {codes[0]}")
+
+    @classmethod
+    async def login_with_code(cls, session_name: str, phone: str, code: str, password: str = None, proxy_str: str = None):
+        client = clients.get(session_name)
+        if not client:
+            client = await cls.create_client(session_name, proxy_str)
+            await client.connect()
+            clients[session_name] = client
+        try:
+            await client.sign_in(phone, code)
+        except SessionPasswordNeededError:
+            if not password:
+                raise ValueError("该账号开启了两步验证，需要输入二次密码")
+            await client.sign_in(password=password)
+        cls._register_handlers(client, session_name)
+        return client
+
+    @classmethod
+    async def get_client(cls, session_name: str) -> Optional[TelegramClient]:
+        return clients.get(session_name)
+
+    @classmethod
+    async def reconnect(cls, session_name: str, proxy_str: str = None) -> TelegramClient:
+        if session_name in clients and clients[session_name].is_connected():
+            return clients[session_name]
+        client = await cls.create_client(session_name, proxy_str)
+        await client.connect()
+        if not await client.is_user_authorized():
+            raise ValueError("Session 无效，需要重新登录")
+        clients[session_name] = client
+        cls._register_handlers(client, session_name)
+        return client
+
+    @classmethod
+    async def join_group_or_channel(cls, session_name: str, link: str) -> dict:
+        client = await cls.get_client(session_name)
+        if not client or not client.is_connected():
+            return {"success": False, "msg": "客户端未连接"}
+        try:
+            if "joinchat/" in link or "+" in link:
+                if "joinchat/" in link:
+                    hash_code = link.split("joinchat/")[-1]
+                else:
+                    hash_code = link.split("+")[-1]
+                await client(ImportChatInviteRequest(hash_code))
+            else:
+                username = link.replace("https://t.me/", "").replace("@", "").strip("/")
+                await client(JoinChannelRequest(username))
+            return {"success": True, "msg": "加入成功"}
+        except UserAlreadyParticipantError:
+            return {"success": True, "msg": "已经是成员"}
+        except (InviteHashExpiredError, InviteHashInvalidError):
+            return {"success": False, "msg": "邀请链接无效或已过期"}
+        except FloodWaitError as e:
+            return {"success": False, "msg": f"触发限制，请等待 {e.seconds} 秒"}
+        except Exception as e:
+            return {"success": False, "msg": str(e)}
+
+    @classmethod
+    async def batch_join(cls, session_names: List[str], links: List[str]) -> List[dict]:
+        results = []
+        for session_name in session_names:
+            for link in links:
+                result = await cls.join_group_or_channel(session_name, link)
+                results.append({"account": session_name, "link": link, **result})
+                await asyncio.sleep(1.8)
+        return results
+
+    @classmethod
+    async def send_message(cls, session_name: str, chat_id: str | int, text: str):
+        client = await cls.get_client(session_name)
+        if not client:
+            raise ValueError("客户端不存在")
+        try:
+            entity = await client.get_entity(chat_id)
+            await client.send_message(entity, text)
+        except Exception:
+            await client.send_message(chat_id, text)
+        return True
+
+    @classmethod
+    async def get_recent_codes(cls, session_name: str) -> List[dict]:
+        return code_cache.get(session_name, [])
+
+    @classmethod
+    async def update_profile(cls, session_name: str, first_name: str = None, about: str = None):
+        client = await cls.get_client(session_name)
+        if not client:
+            raise ValueError("客户端不存在或未连接")
+        from telethon.tl.functions.account import UpdateProfileRequest
+        await client(UpdateProfileRequest(
+            first_name=first_name or "",
+            about=about or ""
+        ))
+        return True
+
+    @classmethod
+    async def upload_profile_photo(cls, session_name: str, photo_path: str):
+        client = await cls.get_client(session_name)
+        if not client:
+            raise ValueError("客户端不存在或未连接")
+        from telethon.tl.functions.photos import UploadProfilePhotoRequest
+        file = await client.upload_file(photo_path)
+        await client(UploadProfilePhotoRequest(file=file))
+        return True
+
+    @classmethod
+    async def get_dialogs(cls, session_name: str, limit: int = 30):
+        client = await cls.get_client(session_name)
+        if not client:
+            raise ValueError("客户端不存在或未连接")
+        dialogs = await client.get_dialogs(limit=limit)
+        result = []
+        for d in dialogs:
+            result.append({
+                "id": d.id,
+                "name": d.name or "未知",
+                "unread": d.unread_count,
+                "is_group": d.is_group,
+                "is_channel": d.is_channel,
+                "date": d.date.isoformat() if d.date else None
+            })
+        return result
+
+    @classmethod
+    async def get_messages(cls, session_name: str, chat_id: int, limit: int = 30):
+        client = await cls.get_client(session_name)
+        if not client:
+            raise ValueError("客户端不存在或未连接")
+        
+        try:
+            entity = await client.get_entity(chat_id)
+            messages = await client.get_messages(entity, limit=limit)
+        except Exception:
+            messages = await client.get_messages(chat_id, limit=limit)
+        
+        result = []
+        for m in reversed(messages):
+            item = {
+                "id": m.id,
+                "text": m.message or "",
+                "out": m.out,
+                "date": m.date.isoformat() if m.date else None,
+                "sender_id": m.sender_id,
+                "media_type": None,
+                "media_url": None
+            }
+            
+            if m.photo:
+                item["media_type"] = "photo"
+                item["text"] = (item["text"] or "") + " 📷"
+            elif m.video or (m.document and 'video' in str(getattr(m.document, 'mime_type', ''))):
+                item["media_type"] = "video"
+                item["text"] = (item["text"] or "") + " 🎬"
+            elif m.document:
+                item["media_type"] = "file"
+                item["text"] = (item["text"] or "") + " 📎"
+            
+            result.append(item)
+        return result

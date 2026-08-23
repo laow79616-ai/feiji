@@ -10,3 +10,5 @@ telegram_manager.db
 *.log
 *.bak
 *.bak2
+*.bak3
+*.old

@@ -226,7 +226,10 @@
                 <div class="font-semibold text-sm">${proxyName}</div>
                 <div class="text-xs text-gray-400 mt-0.5">${count}/10 号 · 在线 ${online} · 剩余 ${remain}</div>
               </div>
-              <span class="text-xs px-2 py-0.5 rounded ${remain>0?'bg-green-900 text-green-300':'bg-red-900 text-red-300'}">${remain>0?'可添加':'已满'}</span>
+              <div class="flex gap-2 shrink-0">
+                <button onclick="lineOnline('${proxyName.replace(/'/g, "\\'")}')" class="text-xs px-2 py-1 bg-green-700 rounded">上线</button>
+                <button onclick="lineOffline('${proxyName.replace(/'/g, "\\'")}')" class="text-xs px-2 py-1 bg-gray-600 rounded">下线</button>
+              </div>
             </div>
             <div class="space-y-2 max-h-64 overflow-y-auto">
               ${list.length ? list.map(a => `
@@ -235,10 +238,10 @@
                     <div class="text-sm truncate">${a.name || a.phone}</div>
                     <div class="text-xs ${a.is_online?'text-green-400':'text-red-400'}">${a.is_online?'在线':'离线'}</div>
                   </div>
-                  <div class="flex gap-1 shrink-0">
-                    <button onclick="selectAccount('${a.session_name}','${(a.name||a.phone).replace(/'/g,'')}')" class="text-xs px-1.5 py-0.5 bg-blue-700 rounded">聊</button>
-                    <button onclick="openProfile('${a.session_name}','${(a.name||a.phone).replace(/'/g,'')}')" class="text-xs px-1.5 py-0.5 bg-gray-700 rounded">资</button>
-                    <button onclick="deleteAccount(${a.id})" class="text-xs px-1.5 py-0.5 bg-red-800 rounded">删</button>
+                  <div class="flex gap-2 shrink-0">
+                    <button onclick="selectAccount('${a.session_name}','${(a.name||a.phone).replace(/'/g,'')}')" class="text-sm px-2.5 py-1 bg-blue-700 rounded">聊天</button>
+                    <button onclick="openProfile('${a.session_name}','${(a.name||a.phone).replace(/'/g,'')}')" class="text-sm px-2.5 py-1 bg-gray-700 rounded">资料</button>
+                    <button onclick="deleteAccount(${a.id})" class="text-sm px-2.5 py-1 bg-red-800 rounded">删除</button>
                   </div>
                 </div>
               `).join('') : '<p class="text-xs text-gray-500">暂无水军号</p>'}
@@ -300,6 +303,7 @@
       document.getElementById('accountTitle').textContent = name + ' 的对话';
       document.getElementById('dialogSection').classList.remove('hidden');
       document.getElementById('msgSection').classList.add('hidden');
+      setTimeout(() => document.getElementById('dialogSection').scrollIntoView({behavior:'smooth', block:'start'}), 100);
       document.getElementById('dialogList').innerHTML = '<p class="text-gray-500 text-sm">加载中...</p>';
       try { await fetch('/accounts/' + session + '/reconnect', {method:'POST'}); } catch(e) {}
       const res = await fetch('/chat/dialogs/' + session);
@@ -455,6 +459,23 @@
         body: JSON.stringify({session_names:accounts, target_ids:targetIds})
       })).json();
       document.getElementById('joinResult').textContent = JSON.stringify(d, null, 2);
+    }
+
+
+    async function lineOnline(proxyName) {
+      if (!confirm('确定上线【' + proxyName + '】？')) return;
+      const res = await fetch('/accounts/line/online?proxy_name=' + encodeURIComponent(proxyName), {method:'POST'});
+      const d = await res.json();
+      alert('成功 ' + (d.success||[]).length + ' 个，失败 ' + (d.failed||[]).length + ' 个');
+      loadAccounts();
+    }
+
+    async function lineOffline(proxyName) {
+      if (!confirm('确定下线【' + proxyName + '】？')) return;
+      const res = await fetch('/accounts/line/offline?proxy_name=' + encodeURIComponent(proxyName), {method:'POST'});
+      const d = await res.json();
+      alert(d.msg || '已下线');
+      loadAccounts();
     }
 
     loadAccounts();

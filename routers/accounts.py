@@ -172,3 +172,63 @@ async def reconnect_account(session_name: str, db: AsyncSession = Depends(get_db
         account.is_online = False
         await db.commit()
         raise HTTPException(400, str(e))
+
+
+
+@router.post("/line/online")
+async def line_online(proxy_name: str, db: AsyncSession = Depends(get_db)):
+    """一键上线某条代理下的所有账号"""
+    from models import Account, Proxy
+    from sqlalchemy import select
+    from clients.manager import ClientManager
+
+    proxy_result = await db.execute(select(Proxy).where(Proxy.name == proxy_name))
+    proxy = proxy_result.scalar_one_or_none()
+    if not proxy:
+        return {"success": [], "failed": [f"代理不存在: {proxy_name}"]}
+
+    result = await db.execute(select(Account).where(Account.proxy_id == proxy.id))
+    accounts = result.scalars().all()
+
+    success, failed = [], []
+    for acc in accounts:
+        try:
+            await ClientManager.reconnect(acc.session_name, proxy.proxy_str)
+            acc.is_online = True
+            success.append(acc.phone)
+        except Exception as e:
+            failed.append(f"{acc.phone}: {str(e)}")
+
+    await db.commit()
+    return {"success": success, "failed": failed}
+
+
+@router.post("/line/offline")
+async def line_offline(proxy_name: str, db: AsyncSession = Depends(get_db)):
+    """一键下线某条代理下的所有账号"""
+    from models import Account, Proxy
+    from sqlalchemy import select
+    from clients.manager import clients
+
+    proxy_result = await db.execute(select(Proxy).where(Proxy.name == proxy_name))
+    proxy = proxy_result.scalar_one_or_none()
+    if not proxy:
+        return {"offline": [], "msg": f"代理不存在: {proxy_name}"}
+
+    result = await db.execute(select(Account).where(Account.proxy_id == proxy.id))
+    accounts = result.scalars().all()
+
+    offline = []
+    for acc in accounts:
+        session_name = acc.session_name
+        if session_name in clients:
+            try:
+                await clients[session_name].disconnect()
+                del clients[session_name]
+            except Exception:
+                pass
+        acc.is_online = False
+        offline.append(acc.phone)
+
+    await db.commit()
+    return {"offline": offline, "msg": "已下线"}

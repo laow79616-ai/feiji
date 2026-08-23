@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+sessions/
+*.session
+media/
+uploads/
+telegram_manager.db
+.env
+*.log
+*.bak
+*.bak2

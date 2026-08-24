@@ -127,6 +127,33 @@ class ClientManager:
     async def join_group_or_channel(cls, session_name: str, link: str) -> dict:
         client = await cls.get_client(session_name)
         if not client or not client.is_connected():
+            try:
+                # 尝试带代理重连
+                proxy_str = None
+                try:
+                    from database import async_session
+                    from models import Account, Proxy
+                    from sqlalchemy import select
+                    async with async_session() as db:
+                        r = await db.execute(
+                            select(Account, Proxy)
+                            .join(Proxy, Account.proxy_id == Proxy.id, isouter=True)
+                            .where(Account.session_name == session_name)
+                        )
+                        row = r.first()
+                        if row:
+                            acc, proxy = row
+                            proxy_str = proxy.proxy_str if proxy else None
+                except Exception:
+                    pass
+                if proxy_str:
+                    await cls.reconnect(session_name, proxy_str)
+                else:
+                    await cls.reconnect(session_name)
+                client = await cls.get_client(session_name)
+            except Exception as e:
+                return {"success": False, "msg": f"连接失败: {e}"}
+        if not client or not client.is_connected():
             return {"success": False, "msg": "客户端未连接"}
         try:
             if "joinchat/" in link or "+" in link:
@@ -148,15 +175,22 @@ class ClientManager:
         except Exception as e:
             return {"success": False, "msg": str(e)}
 
+
     @classmethod
-    async def batch_join(cls, session_names: List[str], links: List[str]) -> List[dict]:
+    async def batch_join(cls, session_names: list, links: list, interval: int = 180):
+        """按间隔陆续加入，返回每个账号每个链接的状态"""
         results = []
         for session_name in session_names:
             for link in links:
                 result = await cls.join_group_or_channel(session_name, link)
-                results.append({"account": session_name, "link": link, **result})
-                await asyncio.sleep(1.8)
+                results.append({
+                    "account": session_name,
+                    "link": link,
+                    **result
+                })
+                await asyncio.sleep(max(1, int(interval)))
         return results
+
 
     @classmethod
     async def send_message(cls, session_name: str, chat_id: str | int, text: str):
@@ -250,3 +284,35 @@ class ClientManager:
             
             result.append(item)
         return result
+
+    @classmethod
+    async def leave_group_or_channel(cls, session_name: str, link: str) -> dict:
+        client = await cls.get_client(session_name)
+        if not client or not client.is_connected():
+            try:
+                await cls.reconnect(session_name)
+                client = await cls.get_client(session_name)
+            except Exception as e:
+                return {"success": False, "msg": f"连接失败: {e}"}
+        if not client or not client.is_connected():
+            return {"success": False, "msg": "客户端未连接"}
+        try:
+            if "joinchat/" in link or "+" in link:
+                return {"success": False, "msg": "邀请链接无法直接退出，请用用户名链接"}
+            username = link.replace("https://t.me/", "").replace("t.me/", "").replace("@", "").strip("/")
+            entity = await client.get_entity(username)
+            await client.delete_dialog(entity)
+            return {"success": True, "msg": "已退出"}
+        except Exception as e:
+            return {"success": False, "msg": str(e)}
+
+    @classmethod
+    async def batch_leave(cls, session_names: list, links: list, interval: int = 5):
+        results = []
+        for session_name in session_names:
+            for link in links:
+                result = await cls.leave_group_or_channel(session_name, link)
+                results.append({"account": session_name, "link": link, **result})
+                await asyncio.sleep(max(1, int(interval)))
+        return results
+

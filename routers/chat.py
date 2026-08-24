@@ -89,3 +89,49 @@ async def upload_photo(
         return {"success": True, "msg": "头像已更新"}
     except Exception as e:
         raise HTTPException(400, str(e))
+import os
+import uuid
+from fastapi import UploadFile, File, Form
+from fastapi.responses import FileResponse
+
+LIBRARY_DIR = "uploads/library"
+os.makedirs(LIBRARY_DIR, exist_ok=True)
+
+@router.get("/library")
+async def list_library():
+    files = []
+    for name in os.listdir(LIBRARY_DIR):
+        if name.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+            files.append({"name": name, "url": f"/chat/library/file/{name}"})
+    return {"files": files}
+
+@router.get("/library/file/{filename}")
+async def get_library_file(filename: str):
+    path = os.path.join(LIBRARY_DIR, filename)
+    if not os.path.exists(path):
+        return {"detail": "not found"}
+    return FileResponse(path)
+
+@router.post("/library/upload")
+async def upload_library(file: UploadFile = File(...)):
+    ext = os.path.splitext(file.filename)[1].lower() or ".jpg"
+    if ext not in [".jpg", ".jpeg", ".png", ".webp", ".gif"]:
+        return {"ok": False, "msg": "仅支持图片"}
+    name = f"{uuid.uuid4().hex}{ext}"
+    path = os.path.join(LIBRARY_DIR, name)
+    with open(path, "wb") as f:
+        f.write(await file.read())
+    return {"ok": True, "name": name, "url": f"/chat/library/file/{name}"}
+
+@router.post("/profile/photo-from-library")
+async def profile_photo_from_library(session_name: str = Form(...), filename: str = Form(...)):
+    from clients.manager import ClientManager
+    path = os.path.join(LIBRARY_DIR, filename)
+    if not os.path.exists(path):
+        return {"ok": False, "msg": "图片不存在"}
+    try:
+        await ClientManager.reconnect(session_name)
+        await ClientManager.upload_profile_photo(session_name, path)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "msg": str(e)}

@@ -117,8 +117,14 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 <select id="joinAccounts" multiple class="h-36 px-2 py-1 rounded text-sm"></select>
 <select id="joinTargets" multiple class="h-36 px-2 py-1 rounded text-sm"></select>
 </div>
-<button onclick="doJoin()" class="btn-primary px-6 py-2 rounded">一键加入</button>
-<pre id="joinResult" class="mt-4 text-xs bg-black/30 p-3 rounded max-h-48 overflow-auto"></pre>
+<div class="flex items-center gap-3 mb-3 flex-wrap">
+  <label class="text-sm text-gray-400">间隔(秒)</label>
+  <input id="joinInterval" type="number" value="180" min="5" class="w-24 px-2 py-1 rounded text-sm">
+  <button onclick="doJoin()" class="btn-primary px-6 py-2 rounded">一键加入</button>
+  <button onclick="doLeave()" class="px-6 py-2 rounded bg-red-800">一键退出</button>
+</div>
+<div id="joinStatus" class="text-sm space-y-1 mb-3 max-h-40 overflow-y-auto"></div>
+<pre id="joinResult" class="mt-2 text-xs bg-black/30 p-3 rounded max-h-48 overflow-auto"></pre>
 </div>
 </div>
 </div>
@@ -201,6 +207,7 @@ function selectGroup(name){
         </div>
         <div class="flex gap-2">
           <button onclick="toggleChat('${a.session_name}','${(a.name||a.phone).replace(/'/g,'')}')" class="text-sm px-3 py-1 bg-blue-700 rounded">聊天</button>
+          <button onclick="openProfile('${a.session_name}','${(a.name||a.phone).replace(/'/g,'')}')" class="text-sm px-3 py-1 bg-gray-700 rounded">资料</button>
           <button onclick="deleteAccount(${a.id})" class="text-sm px-3 py-1 bg-red-800 rounded">删除</button>
         </div>
       </div>
@@ -291,6 +298,123 @@ async function lineOffline(name){
   alert((await res.json()).msg||'已下线');
   loadAccounts();
 }
+
+let profileSession = null;
+
+function openProfile(session, name) {
+  profileSession = session;
+  let modal = document.getElementById("profileModal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "profileModal";
+    modal.innerHTML = `
+      <div style="position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px">
+        <div style="background:#111827;border:1px solid #334155;border-radius:12px;padding:20px;max-width:480px;width:100%;max-height:90vh;overflow:auto">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h3 style="font-weight:600" id="profileModalTitle">修改资料</h3>
+            <button onclick="closeProfileModal()" style="background:#374151;padding:4px 10px;border-radius:6px;font-size:12px">关闭</button>
+          </div>
+          <input id="pfName" placeholder="昵称" style="width:100%;padding:8px;margin-bottom:8px;border-radius:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0">
+          <textarea id="pfAbout" placeholder="简介" rows="3" style="width:100%;padding:8px;margin-bottom:12px;border-radius:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0"></textarea>
+          <div style="margin-bottom:8px;font-size:13px;color:#94a3b8">图片库（点击选为头像）</div>
+          <div id="pfLibrary" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;max-height:160px;overflow:auto"></div>
+          <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+            <label style="background:#2563eb;padding:8px 12px;border-radius:6px;font-size:13px;cursor:pointer">
+              上传到图库 <input type="file" id="pfUpload" accept="image/*" multiple style="display:none" onchange="uploadToLibrary()">
+            </label>
+            <button onclick="saveProfileText()" style="background:#059669;padding:8px 12px;border-radius:6px;font-size:13px">保存昵称简介</button>
+          </div>
+          <p id="pfMsg" style="font-size:12px;color:#4ade80"></p>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  document.getElementById("profileModalTitle").textContent = "修改资料 - " + name;
+  document.getElementById("pfName").value = "";
+  document.getElementById("pfAbout").value = "";
+  document.getElementById("pfMsg").textContent = "";
+  modal.style.display = "block";
+  loadLibrary();
+}
+
+function closeProfileModal() {
+  const m = document.getElementById("profileModal");
+  if (m) m.style.display = "none";
+  profileSession = null;
+}
+
+async function loadLibrary() {
+  const box = document.getElementById("pfLibrary");
+  box.innerHTML = "加载中...";
+  try {
+    const d = await (await fetch("/chat/library")).json();
+    const files = d.files || [];
+    if (!files.length) {
+      box.innerHTML = '<span style="font-size:12px;color:#64748b">图库为空，请先上传</span>';
+      return;
+    }
+    box.innerHTML = files.map(f =>
+      `<img src="${f.url}" data-name="${f.name}" onclick="setPhotoFromLibrary('${f.name}')"
+        style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;cursor:pointer;border:2px solid transparent"
+        onmouseover="this.style.borderColor='#2563eb'" onmouseout="this.style.borderColor='transparent'">`
+    ).join("");
+  } catch(e) {
+    box.innerHTML = '<span style="color:#f87171">加载失败</span>';
+  }
+}
+
+async function uploadToLibrary() {
+  const files = document.getElementById("pfUpload").files;
+  if (!files || !files.length) return;
+  document.getElementById("pfMsg").textContent = "上传中 0/" + files.length;
+  let ok = 0, fail = 0;
+  for (let i = 0; i < files.length; i++) {
+    const form = new FormData();
+    form.append("file", files[i]);
+    try {
+      const res = await fetch("/chat/library/upload", { method: "POST", body: form });
+      const d = await res.json();
+      if (d.ok) ok++; else fail++;
+    } catch(e) { fail++; }
+    document.getElementById("pfMsg").textContent = "上传中 " + (i+1) + "/" + files.length;
+  }
+  document.getElementById("pfMsg").textContent = "完成：成功 " + ok + " 失败 " + fail;
+  document.getElementById("pfUpload").value = "";
+  loadLibrary();
+}
+
+async function setPhotoFromLibrary(filename) {
+  if (!profileSession) return;
+  if (!confirm("用这张图作为头像？")) return;
+  document.getElementById("pfMsg").textContent = "设置头像中...";
+  const form = new FormData();
+  form.append("session_name", profileSession);
+  form.append("filename", filename);
+  try {
+    await fetch("/accounts/" + profileSession + "/reconnect", { method: "POST" });
+  } catch(e) {}
+  const res = await fetch("/chat/profile/photo-from-library", { method: "POST", body: form });
+  const d = await res.json();
+  document.getElementById("pfMsg").textContent = d.ok ? "头像已更新" : (d.msg || "失败");
+}
+
+async function saveProfileText() {
+  if (!profileSession) return;
+  const first = document.getElementById("pfName").value.trim();
+  const about = document.getElementById("pfAbout").value.trim();
+  document.getElementById("pfMsg").textContent = "保存中...";
+  try {
+    await fetch("/accounts/" + profileSession + "/reconnect", { method: "POST" });
+  } catch(e) {}
+  const res = await fetch("/chat/profile/update", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_name: profileSession, first_name: first, about: about })
+  });
+  document.getElementById("pfMsg").textContent = res.ok ? "昵称简介已保存" : "保存失败";
+}
+
+
 async function deleteAccount(id){
   if(!confirm('确定删除?'))return;
   if((await fetch('/accounts/'+id,{method:'DELETE'})).ok)loadAccounts();
@@ -355,12 +479,61 @@ async function loadTargets(){
   const sel=document.getElementById('joinTargets');
   if(sel)sel.innerHTML=list.map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
 }
+
+async function doLeave(){
+  const accounts=[...document.getElementById('joinAccounts').selectedOptions].map(o=>o.value);
+  const targetIds=[...document.getElementById('joinTargets').selectedOptions].map(o=>parseInt(o.value));
+  const interval=parseInt(document.getElementById('joinInterval')?.value||5);
+  if(!accounts.length||!targetIds.length)return alert('请选择水军和目标');
+  if(!confirm('确定让选中水军退出选中的群/频道？'))return;
+  const statusEl=document.getElementById('joinStatus');
+  if(statusEl) statusEl.innerHTML='<span class="text-yellow-400">退出中...</span>';
+  try{
+    const d=await(await fetch('/targets/leave',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_names:accounts,target_ids:targetIds,interval:Math.min(interval,10)})
+    })).json();
+    document.getElementById('joinResult').textContent=JSON.stringify(d,null,2);
+    if(statusEl && d.details){
+      statusEl.innerHTML=d.details.map(r=>{
+        const ok=r.success;
+        return '<div class="'+(ok?'text-green-400':'text-red-400')+'">'+(ok?'✓':'✗')+' '+r.account+' → '+(r.msg||'')+'</div>';
+      }).join('');
+    }
+  }catch(e){
+    if(statusEl) statusEl.innerHTML='<span class="text-red-400">请求失败</span>';
+    document.getElementById('joinResult').textContent=String(e);
+  }
+}
+
 async function doJoin(){
   const accounts=[...document.getElementById('joinAccounts').selectedOptions].map(o=>o.value);
   const targetIds=[...document.getElementById('joinTargets').selectedOptions].map(o=>parseInt(o.value));
-  if(!accounts.length||!targetIds.length)return alert('请选择');
-  const d=await(await fetch('/targets/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_names:accounts,target_ids:targetIds})})).json();
-  document.getElementById('joinResult').textContent=JSON.stringify(d,null,2);
+  const interval=parseInt(document.getElementById('joinInterval')?.value||60);
+  if(!accounts.length||!targetIds.length)return alert('请选择水军和目标');
+  const statusEl=document.getElementById('joinStatus');
+  if(statusEl) statusEl.innerHTML='<span class="text-yellow-400">执行中，间隔 '+interval+' 秒，请勿关闭...</span>';
+  document.getElementById('joinResult').textContent='请求中...';
+  try{
+    const d=await(await fetch('/targets/join',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_names:accounts,target_ids:targetIds,interval:interval})
+    })).json();
+    document.getElementById('joinResult').textContent=JSON.stringify(d,null,2);
+    if(statusEl && d.details){
+      statusEl.innerHTML=d.details.map(r=>{
+        const ok=r.success;
+        const color=ok?'text-green-400':'text-red-400';
+        return '<div class="'+color+'">'+(ok?'✓':'✗')+' '+r.account+' → '+r.link+' · '+(r.msg||'')+'</div>';
+      }).join('');
+    } else if(statusEl){
+      statusEl.innerHTML='<span class="text-green-400">完成：成功 '+(d.success||0)+' 失败 '+(d.failed||0)+'</span>';
+    }
+  }catch(e){
+    document.getElementById('joinResult').textContent=String(e);
+    if(statusEl) statusEl.innerHTML='<span class="text-red-400">请求失败</span>';
+  }
 }
 loadAccounts();
 </script>

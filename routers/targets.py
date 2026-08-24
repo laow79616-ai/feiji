@@ -19,6 +19,7 @@ class TargetCreate(BaseModel):
 class BatchJoinRequest(BaseModel):
     session_names: List[str]
     target_ids: List[int]
+    interval: int = 180
 
 
 @router.post("/")
@@ -61,7 +62,7 @@ async def join_targets(req: BatchJoinRequest, db: AsyncSession = Depends(get_db)
     targets = result.scalars().all()
     links = [t.link for t in targets]
 
-    results = await ClientManager.batch_join(req.session_names, links)
+    results = await ClientManager.batch_join(req.session_names, links, getattr(req, 'interval', 60))
     success_count = sum(1 for r in results if r["success"])
     return {
         "total": len(results),
@@ -69,3 +70,23 @@ async def join_targets(req: BatchJoinRequest, db: AsyncSession = Depends(get_db)
         "failed": len(results) - success_count,
         "details": results
     }
+
+
+@router.post("/leave")
+async def leave_targets(req: BatchJoinRequest, db: AsyncSession = Depends(get_db)):
+    """一键退出指定群组/频道"""
+    if not req.session_names or not req.target_ids:
+        raise HTTPException(400, "请选择水军号和目标")
+    result = await db.execute(select(Target).where(Target.id.in_(req.target_ids)))
+    targets = result.scalars().all()
+    links = [t.link for t in targets]
+    interval = getattr(req, "interval", 5) or 5
+    results = await ClientManager.batch_leave(req.session_names, links, interval)
+    success_count = sum(1 for r in results if r.get("success"))
+    return {
+        "total": len(results),
+        "success": success_count,
+        "failed": len(results) - success_count,
+        "details": results
+    }
+

@@ -304,7 +304,10 @@ class ClientManager:
             await client.delete_dialog(entity)
             return {"success": True, "msg": "已退出"}
         except Exception as e:
-            return {"success": False, "msg": str(e)}
+            msg = str(e)
+            if "not a member" in msg.lower() or "USER_NOT_PARTICIPANT" in msg:
+                return {"success": True, "msg": "已不在群内"}
+            return {"success": False, "msg": msg}
 
     @classmethod
     async def batch_leave(cls, session_names: list, links: list, interval: int = 5):

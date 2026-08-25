@@ -35,7 +35,7 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 <button onclick="switchTab('apis')" id="tab-apis" class="nav-item px-3 py-1.5 rounded-lg text-sm">API池</button>
 <button onclick="switchTab('proxies')" id="tab-proxies" class="nav-item px-3 py-1.5 rounded-lg text-sm">代理池</button>
 <button onclick="switchTab('targets')" id="tab-targets" class="nav-item px-3 py-1.5 rounded-lg text-sm">目标</button>
-<button onclick="switchTab('join')" id="tab-join" class="nav-item px-3 py-1.5 rounded-lg text-sm">一键加入</button>
+<button onclick="switchTab('join')" id="tab-join" class="nav-item px-3 py-1.5 rounded-lg text-sm">开始批量加入</button>
 </div>
 
 <div id="panel-accounts" class="panel">
@@ -81,6 +81,15 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 </div>
 </div>
 
+
+    <div class="card rounded-xl p-5 mt-4">
+      <h3 class="font-semibold mb-2 text-sm">上传 ZIP 批量导入（.session + .json）</h3>
+      <p class="text-xs text-gray-400 mb-2">ZIP 内每个号一对文件：手机号.session 和 手机号.json。使用上方所选 API 与代理。</p>
+      <input type="file" id="zipFile" accept=".zip" class="text-sm mb-3">
+      <button onclick="importZip()" class="btn-primary px-5 py-2 rounded">上传并导入</button>
+      <pre id="zipResult" class="mt-2 text-xs bg-black/30 p-2 rounded max-h-40 overflow-auto"></pre>
+    </div>
+
 <div id="panel-apis" class="panel hidden">
 <div class="card rounded-xl p-5 mb-4">
 <textarea id="apiBatchText" rows="4" class="w-full px-3 py-2 rounded text-sm mb-3"></textarea>
@@ -114,13 +123,15 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 <div id="panel-join" class="panel hidden">
 <div class="card rounded-xl p-5">
 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-<select id="joinAccounts" multiple class="h-36 px-2 py-1 rounded text-sm"></select>
-<select id="joinTargets" multiple class="h-36 px-2 py-1 rounded text-sm"></select>
+<div class="text-xs text-gray-400 mb-1">水军池共 <span id="joinAccCount">0</span> 个 · 已选 <span id="joinAccSelected">0</span></div>
+<select id="joinAccounts" onchange="updateJoinCounts()" multiple class="h-36 px-2 py-1 rounded text-sm"></select>
+<div class="text-xs text-gray-400 mb-1">目标共 <span id="joinTargetCount">0</span> 个 · 已选 <span id="joinTargetSelected">0</span></div>
+<select id="joinTargets" onchange="updateJoinCounts()" multiple class="h-36 px-2 py-1 rounded text-sm"></select>
 </div>
 <div class="flex items-center gap-3 mb-3 flex-wrap">
   <label class="text-sm text-gray-400">间隔(秒)</label>
   <input id="joinInterval" type="number" value="180" min="5" class="w-24 px-2 py-1 rounded text-sm">
-  <button onclick="doJoin()" class="btn-primary px-6 py-2 rounded">一键加入</button>
+  <button onclick="doJoin()" class="btn-primary px-6 py-2 rounded">开始批量加入</button>
   <button onclick="doLeave()" class="px-6 py-2 rounded bg-red-800">一键退出</button>
 </div>
 <div id="joinStatus" class="text-sm space-y-1 mb-3 max-h-40 overflow-y-auto"></div>
@@ -174,7 +185,7 @@ async function loadAccounts(){
 
   const opts=accounts.map(a=>`<option value="${a.session_name}">${a.name||a.phone}</option>`).join('');
   const je=document.getElementById('joinAccounts');
-  if(je)je.innerHTML=opts;
+  if(je){je.innerHTML=opts;} if(typeof updateJoinCounts==='function') updateJoinCounts();
 }
 
 function selectGroup(name){
@@ -193,6 +204,7 @@ function selectGroup(name){
     <div class="flex gap-2">
       <button onclick="lineOnline('${name.replace(/'/g,"\\'")}')" class="text-sm px-3 py-1.5 bg-green-700 rounded">整组上线</button>
       <button onclick="lineOffline('${name.replace(/'/g,"\\'")}')" class="text-sm px-3 py-1.5 bg-gray-600 rounded">整组下线</button>
+      <button onclick="checkHealthGroup('${name.replace(/'/g,"\\'")}')" class="text-sm px-3 py-1.5 bg-amber-700 rounded">检测活跃</button>
     </div>
   </div>
   <div class="space-y-2">`;
@@ -202,13 +214,13 @@ function selectGroup(name){
     html+=`<div class="bg-[#0f172a] rounded-lg overflow-hidden">
       <div class="px-3 py-2 flex items-center justify-between gap-2">
         <div>
-          <div class="text-sm">${a.name||a.phone}</div>
-          <div class="text-xs ${a.is_online?'text-green-400':'text-red-400'}">${a.is_online?'在线':'离线'}</div>
+          <div class="text-sm">${a.name||a.phone}${a.is_monitor?' <span class="text-purple-400 text-xs">监</span>':''}</div>
+          <div class="text-xs ${a.is_online?'text-green-400':'text-red-400'}">${a.is_online?'在线':'离线'}${a.health_status==='dead'?' ·已死':a.health_status==='active'?' ·活跃':''}</div>
         </div>
         <div class="flex gap-2">
           <button onclick="toggleChat('${a.session_name}','${(a.name||a.phone).replace(/'/g,'')}')" class="text-sm px-3 py-1 bg-blue-700 rounded">聊天</button>
           <button onclick="openProfile('${a.session_name}','${(a.name||a.phone).replace(/'/g,'')}')" class="text-sm px-3 py-1 bg-gray-700 rounded">资料</button>
-          <button onclick="deleteAccount(${a.id})" class="text-sm px-3 py-1 bg-red-800 rounded">删除</button>
+<button onclick="deleteAccount(${a.id})" class="text-sm px-3 py-1 bg-red-800 rounded">删除</button>
         </div>
       </div>
       <div id="chatbox-${a.session_name}" class="hidden border-t border-gray-700 p-3">
@@ -474,10 +486,38 @@ async function addTarget(){
   document.getElementById('targetMsg').textContent='已添加';loadTargets();
 }
 async function loadTargets(){
-  const list=await(await fetch('/targets/')).json();
-  document.getElementById('targetList').innerHTML=list.map(t=>`<div class="bg-[#0f172a] rounded px-3 py-2">${t.name}<div class="text-xs text-gray-500">${t.link}</div></div>`).join('')||'<p class="text-gray-500">暂无</p>';
-  const sel=document.getElementById('joinTargets');
-  if(sel)sel.innerHTML=list.map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
+  try{
+    const list=await(await fetch('/targets/')).json();
+    if(!Array.isArray(list)){
+      document.getElementById('targetList').innerHTML='<p class="text-red-400">加载失败</p>';
+      return;
+    }
+    document.getElementById('targetList').innerHTML=list.map(t=>`
+      <div class="bg-[#0f172a] rounded px-3 py-2 flex justify-between items-center gap-2">
+        <div>
+          <div class="text-sm">${t.name}${t.member_count!=null?' <span class="text-green-400 text-xs">'+t.member_count+'人</span>':''}</div>
+          <div class="text-xs text-gray-500">${t.link}</div>
+        </div>
+        <button onclick="refreshMembers(${t.id})" class="text-xs px-2 py-1 bg-gray-700 rounded shrink-0">刷新人数</button>
+      </div>
+    `).join('')||'<p class="text-gray-500">暂无</p>';
+    const sel=document.getElementById('joinTargets');
+    if(sel){
+      sel.innerHTML=list.map(t=>`<option value="${t.id}">${t.name}${t.member_count!=null?' · '+t.member_count+'人':''}</option>`).join('');
+      if(typeof updateJoinCounts==='function') updateJoinCounts();
+    }
+  }catch(e){
+    document.getElementById('targetList').innerHTML='<p class="text-red-400">加载失败</p>';
+  }
+}
+
+async function refreshMembers(id){
+  try{
+    const m=await(await fetch('/targets/'+id+'/members')).json();
+    if(m.members!=null) alert('当前人数: '+m.members);
+    else alert(m.msg||'查询失败');
+    loadTargets();
+  }catch(e){ alert('查询失败'); }
 }
 
 async function doLeave(){
@@ -506,34 +546,133 @@ async function doLeave(){
   }
 }
 
+let currentJoinJob = null;
+let joinPollTimer = null;
+
+
+function updateJoinCounts(){
+  const acc=document.getElementById('joinAccounts');
+  const tgt=document.getElementById('joinTargets');
+  if(acc){
+    document.getElementById('joinAccCount').textContent=acc.options.length;
+    document.getElementById('joinAccSelected').textContent=acc.selectedOptions.length;
+  }
+  if(tgt){
+    document.getElementById('joinTargetCount').textContent=tgt.options.length;
+    document.getElementById('joinTargetSelected').textContent=tgt.selectedOptions.length;
+  }
+}
+
+
+async function setMonitor(session){
+  if(!confirm('将此号设为监听号（用于查询群人数，会保持连接）？')) return;
+  const res=await fetch('/accounts/'+session+'/set_monitor?enable=true',{method:'POST'});
+  const d=await res.json();
+  alert(d.msg||JSON.stringify(d));
+  loadAccounts();
+}
+
+
+async function importZip(){
+  const f=document.getElementById('zipFile').files[0];
+  const api_id=parseInt(document.getElementById('selectApi').value);
+  const proxy_id=parseInt(document.getElementById('selectProxy').value);
+  if(!f) return alert('请选择 ZIP');
+  if(!api_id||!proxy_id) return alert('请选择 API 和代理');
+  const fd=new FormData();
+  fd.append('file', f);
+  fd.append('api_id', api_id);
+  fd.append('proxy_id', proxy_id);
+  document.getElementById('zipResult').textContent='上传中...';
+  try{
+    const d=await(await fetch('/accounts/import-zip',{method:'POST',body:fd})).json();
+    document.getElementById('zipResult').textContent=JSON.stringify(d,null,2);
+    if(d.success) loadAccounts();
+  }catch(e){
+    document.getElementById('zipResult').textContent=String(e);
+  }
+}
+
+
+async function checkHealthGroup(proxyName){
+  if(!confirm('检测该线路账号是否活跃？可能需要几分钟')) return;
+  const accs=(allGroups[proxyName]||[]).map(a=>a.session_name);
+  if(!accs.length) return alert('无账号');
+  const res=await fetch('/accounts/check-health',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({session_names:accs})
+  });
+  // 若后端要的是 query/body 不同，兼容
+  let d;
+  try{ d=await res.json(); }catch(e){ alert('请求失败'); return; }
+  alert('活跃 '+(d.active||0)+' / 已死 '+(d.dead||0)+' / 共 '+(d.total||0));
+  loadAccounts();
+}
+
 async function doJoin(){
   const accounts=[...document.getElementById('joinAccounts').selectedOptions].map(o=>o.value);
   const targetIds=[...document.getElementById('joinTargets').selectedOptions].map(o=>parseInt(o.value));
-  const interval=parseInt(document.getElementById('joinInterval')?.value||60);
+  const interval=parseInt(document.getElementById('joinInterval')?.value||180);
   if(!accounts.length||!targetIds.length)return alert('请选择水军和目标');
   const statusEl=document.getElementById('joinStatus');
-  if(statusEl) statusEl.innerHTML='<span class="text-yellow-400">执行中，间隔 '+interval+' 秒，请勿关闭...</span>';
-  document.getElementById('joinResult').textContent='请求中...';
+  if(statusEl) statusEl.innerHTML='<span class="text-yellow-400">创建任务中...</span>';
   try{
-    const d=await(await fetch('/targets/join',{
+    const d=await(await fetch('/targets/join/start',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({session_names:accounts,target_ids:targetIds,interval:interval})
     })).json();
-    document.getElementById('joinResult').textContent=JSON.stringify(d,null,2);
-    if(statusEl && d.details){
-      statusEl.innerHTML=d.details.map(r=>{
-        const ok=r.success;
-        const color=ok?'text-green-400':'text-red-400';
-        return '<div class="'+color+'">'+(ok?'✓':'✗')+' '+r.account+' → '+r.link+' · '+(r.msg||'')+'</div>';
-      }).join('');
-    } else if(statusEl){
-      statusEl.innerHTML='<span class="text-green-400">完成：成功 '+(d.success||0)+' 失败 '+(d.failed||0)+'</span>';
+    if(d.job_id){
+      currentJoinJob=d.job_id;
+      document.getElementById('joinResult').textContent=JSON.stringify(d,null,2);
+      if(statusEl) statusEl.innerHTML='<span class="text-green-400">任务已开始 '+d.job_id+' · 共'+d.total+'个 · 间隔'+interval+'秒</span> <button onclick="stopJoinJob()" class="text-xs px-2 py-1 bg-red-800 rounded ml-2">停止</button>';
+      startJoinPoll();
+    }else{
+      if(statusEl) statusEl.innerHTML='<span class="text-red-400">'+(d.detail||JSON.stringify(d))+'</span>';
     }
   }catch(e){
-    document.getElementById('joinResult').textContent=String(e);
     if(statusEl) statusEl.innerHTML='<span class="text-red-400">请求失败</span>';
+    document.getElementById('joinResult').textContent=String(e);
   }
+}
+
+function startJoinPoll(){
+  if(joinPollTimer) clearInterval(joinPollTimer);
+  joinPollTimer=setInterval(pollJoinJob, 3000);
+  pollJoinJob();
+}
+
+async function pollJoinJob(){
+  if(!currentJoinJob) return;
+  try{
+    const j=await(await fetch('/targets/join/status/'+currentJoinJob)).json();
+    const statusEl=document.getElementById('joinStatus');
+    const pct=j.total?Math.round(j.done/j.total*100):0;
+    let html='<div class="mb-1">状态: <b>'+j.status+'</b> · 进度 '+j.done+'/'+j.total+' ('+pct+'%) · 成功'+j.success+' 失败'+j.failed+'</div>';
+    if(j.current) html+='<div class="text-xs text-gray-400 mb-1">当前: '+j.current+'</div>';
+    html+='<div class="w-full bg-gray-800 rounded h-2 mb-2"><div class="bg-blue-600 h-2 rounded" style="width:'+pct+'%"></div></div>';
+    if(j.status==='running'||j.status==='pending'){
+      html+='<button onclick="stopJoinJob()" class="text-xs px-2 py-1 bg-red-800 rounded">停止任务</button>';
+    }
+    if(j.details && j.details.length){
+      html+='<div class="max-h-32 overflow-y-auto text-xs mt-2">'+j.details.slice(-20).map(r=>{
+        const ok=r.success;
+        return '<div class="'+(ok?'text-green-400':'text-red-400')+'">'+(ok?'✓':'✗')+' '+r.account+' → '+(r.msg||'')+'</div>';
+      }).join('')+'</div>';
+    }
+    if(statusEl) statusEl.innerHTML=html;
+    document.getElementById('joinResult').textContent=JSON.stringify(j,null,2);
+    if(j.status==='finished'||j.status==='stopped'){
+      clearInterval(joinPollTimer);
+      joinPollTimer=null;
+    }
+  }catch(e){}
+}
+
+async function stopJoinJob(){
+  if(!currentJoinJob) return;
+  await fetch('/targets/join/stop/'+currentJoinJob,{method:'POST'});
+  alert('已请求停止');
 }
 loadAccounts();
 </script>

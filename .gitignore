@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 sessions/
 *.session
+*.session-journal
 media/
 uploads/
 telegram_manager.db

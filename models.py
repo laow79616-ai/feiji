@@ -36,6 +36,8 @@ class Account(Base):
     
     is_active = Column(Boolean, default=True)
     is_online = Column(Boolean, default=False)
+    health_status = Column(String(20), default='unknown')
+    is_monitor = Column(Boolean, default=False)
     last_login = Column(DateTime(timezone=True), server_default=func.now())
     note = Column(Text, nullable=True)
 
@@ -47,4 +49,7 @@ class Target(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100))
     link = Column(String(300), unique=True)
+    member_count = Column(Integer, nullable=True)
+    last_member_count = Column(Integer, nullable=True)
+    member_updated_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

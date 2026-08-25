@@ -278,113 +278,6 @@ import tempfile
 import shutil
 from fastapi import File, UploadFile, Form
 
-@router.post("/import-zip")
-async def import_zip(
-    file: UploadFile = File(...),
-    api_id: int = Form(...),
-    proxy_id: int = Form(...),
-    db: AsyncSession = Depends(get_db),
-):
-    """上传 ZIP（内含 手机号.session + 手机号.json）批量导入水军"""
-    if not file.filename.lower().endswith(".zip"):
-        raise HTTPException(400, "请上传 zip 文件")
-
-    # 校验 api / proxy
-    api_r = await db.execute(select(ApiCredential).where(ApiCredential.id == api_id))
-    api = api_r.scalar_one_or_none()
-    if not api:
-        raise HTTPException(400, "API 不存在")
-    proxy_r = await db.execute(select(Proxy).where(Proxy.id == proxy_id))
-    proxy = proxy_r.scalar_one_or_none()
-    if not proxy:
-        raise HTTPException(400, "代理不存在")
-
-    from config import SESSIONS_DIR
-    os.makedirs(SESSIONS_DIR, exist_ok=True)
-
-    success, failed = [], []
-    tmpdir = tempfile.mkdtemp(prefix="tgzip_")
-    try:
-        zip_path = os.path.join(tmpdir, "upload.zip")
-        with open(zip_path, "wb") as f:
-            f.write(await file.read())
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(tmpdir)
-
-        # 收集所有 .session
-        sessions = {}
-        for root, _, files in os.walk(tmpdir):
-            for name in files:
-                low = name.lower()
-                if low.endswith(".session"):
-                    base = name[:-8]  # 去掉 .session
-                    sessions[base] = os.path.join(root, name)
-                elif low.endswith(".session-journal"):
-                    continue
-
-        for base, sess_path in sessions.items():
-            try:
-                # 找对应 json
-                json_path = None
-                for root, _, files in os.walk(tmpdir):
-                    for name in files:
-                        if name == base + ".json" or name == base.lower() + ".json":
-                            json_path = os.path.join(root, name)
-                            break
-                    if json_path:
-                        break
-
-                meta = {}
-                if json_path and os.path.exists(json_path):
-                    with open(json_path, "r", encoding="utf-8") as jf:
-                        meta = json.load(jf)
-
-                phone = str(meta.get("phone") or meta.get("phone_number") or base)
-                phone = phone if phone.startswith("+") else ("+" + re.sub(r"\D", "", phone))
-                # session 文件名用安全名
-                safe = re.sub(r"[^\w\+\-]", "_", phone)
-                session_name = f"imp_{safe}"
-
-                # 是否已存在
-                exists = await db.execute(select(Account).where(Account.phone == phone))
-                if exists.scalar_one_or_none():
-                    failed.append(f"{phone}: 已存在")
-                    continue
-
-                # 复制 session
-                dest = os.path.join(SESSIONS_DIR, f"{session_name}.session")
-                shutil.copy2(sess_path, dest)
-                # journal
-                journal = sess_path + "-journal"
-                if os.path.exists(journal):
-                    shutil.copy2(journal, dest + "-journal")
-
-                acc = Account(
-                    phone=phone,
-                    name=str(meta.get("first_name") or meta.get("username") or phone),
-                    session_name=session_name,
-                    api_id=api_id,
-                    proxy_id=proxy_id,
-                    is_active=True,
-                    is_online=False,
-                )
-                db.add(acc)
-                await db.commit()
-                success.append(phone)
-            except Exception as e:
-                failed.append(f"{base}: {str(e)}")
-
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
-
-    return {
-        "success": len(success),
-        "failed_count": len(failed),
-        "ok_list": success,
-        "failed": failed,
-        "msg": f"成功导入 {len(success)} 个",
-    }
-
 
 class CheckHealthRequest(BaseModel):
     session_names: List[str] = None
@@ -444,4 +337,174 @@ async def check_health(req: CheckHealthRequest = None, db: AsyncSession = Depend
     active = sum(1 for x in results if x["status"]=="active")
     dead = sum(1 for x in results if x["status"]=="dead")
     return {"total": len(results), "active": active, "dead": dead, "details": results}
+
+
+@router.post("/import-zip")
+async def import_zip(
+    file: UploadFile = File(...),
+    api_id: int = Form(None),
+    proxy_id: int = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """ZIP导入：先检测活跃，死号不导入；自动分配到未满10的代理"""
+    if not file.filename.lower().endswith(".zip"):
+        raise HTTPException(400, "请上传 zip 文件")
+
+    from config import SESSIONS_DIR
+    from models import Proxy, ApiCredential
+    import os, re as _re, json, zipfile, tempfile, shutil
+
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
+
+    apis_r = await db.execute(select(ApiCredential).order_by(ApiCredential.id))
+    apis = apis_r.scalars().all()
+    if not apis:
+        raise HTTPException(400, "请先添加 API")
+
+    async def proxy_slots():
+        pr = await db.execute(select(Proxy).order_by(Proxy.id))
+        proxies = pr.scalars().all()
+        out = []
+        for p in proxies:
+            cr = await db.execute(select(Account).where(Account.proxy_id == p.id))
+            used = len(list(cr.scalars().all()))
+            if used < 10:
+                out.append((p, used))
+        return out
+
+    tmpdir = tempfile.mkdtemp(prefix="tgzip_")
+    success, dead, failed = [], [], []
+    try:
+        zip_path = os.path.join(tmpdir, "upload.zip")
+        with open(zip_path, "wb") as f:
+            f.write(await file.read())
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(tmpdir)
+
+        sessions = {}
+        for root, _, files in os.walk(tmpdir):
+            for name in files:
+                if name.lower().endswith(".session") and not name.endswith("-journal"):
+                    base = name[:-8]
+                    sessions[base] = os.path.join(root, name)
+
+        api_idx = 0
+        for base, sess_path in sessions.items():
+            try:
+                slots = await proxy_slots()
+                if not slots:
+                    failed.append(f"{base}: 所有代理已满(每组10个)")
+                    break
+
+                json_path = None
+                for root, _, files in os.walk(tmpdir):
+                    for name in files:
+                        if name == base + ".json":
+                            json_path = os.path.join(root, name)
+                            break
+                    if json_path:
+                        break
+                meta = {}
+                if json_path and os.path.exists(json_path):
+                    with open(json_path, "r", encoding="utf-8") as jf:
+                        meta = json.load(jf)
+
+                phone = str(meta.get("phone") or meta.get("phone_number") or base)
+                digits = _re.sub(r"[^0-9]", "", str(phone))
+                phone = phone if str(phone).startswith("+") else ("+" + digits)
+
+                exists = await db.execute(select(Account).where(Account.phone == phone))
+                if exists.scalar_one_or_none():
+                    failed.append(f"{phone}: 已存在")
+                    continue
+
+                safe = _re.sub(r"[^\w+\-]", "_", phone)
+                session_name = f"imp_{safe}"
+                dest = os.path.join(SESSIONS_DIR, f"{session_name}.session")
+                shutil.copy2(sess_path, dest)
+                if os.path.exists(sess_path + "-journal"):
+                    shutil.copy2(sess_path + "-journal", dest + "-journal")
+
+                slots.sort(key=lambda x: x[1])
+                proxy, _used = slots[0]
+                api = apis[api_idx % len(apis)]
+                api_idx += 1
+
+                if api_id:
+                    ar = await db.execute(select(ApiCredential).where(ApiCredential.id == int(api_id)))
+                    a2 = ar.scalar_one_or_none()
+                    if a2:
+                        api = a2
+                if proxy_id:
+                    pr = await db.execute(select(Proxy).where(Proxy.id == int(proxy_id)))
+                    p2 = pr.scalar_one_or_none()
+                    if p2:
+                        cr = await db.execute(select(Account).where(Account.proxy_id == p2.id))
+                        if len(list(cr.scalars().all())) < 10:
+                            proxy = p2
+
+                status, msg = "unknown", ""
+                try:
+                    await ClientManager.reconnect(session_name, proxy.proxy_str)
+                    client = await ClientManager.get_client(session_name)
+                    if client and client.is_connected():
+                        me = await client.get_me()
+                        if me:
+                            status, msg = "active", "活跃"
+                        else:
+                            status, msg = "dead", "get_me空"
+                    else:
+                        status, msg = "dead", "无法连接"
+                    try:
+                        if client:
+                            await client.disconnect()
+                    except Exception:
+                        pass
+                except Exception as e:
+                    em = str(e)
+                    dead_keys = ["AUTH_KEY", "SESSION_REVOKED", "USER_DEACTIVATED", "deactivated", "revoked", "unauthorized"]
+                    if any(k.lower() in em.lower() for k in dead_keys):
+                        status = "dead"
+                    else:
+                        status = "fail"
+                    msg = em
+
+                if status != "active":
+                    try:
+                        os.remove(dest)
+                    except Exception:
+                        pass
+                    dead.append(f"{phone}: {msg}")
+                    await asyncio.sleep(1)
+                    continue
+
+                acc = Account(
+                    phone=phone,
+                    name=str(meta.get("first_name") or meta.get("username") or phone),
+                    session_name=session_name,
+                    api_id=api.id,
+                    proxy_id=proxy.id,
+                    is_active=True,
+                    is_online=False,
+                )
+                if hasattr(acc, "health_status"):
+                    acc.health_status = "active"
+                db.add(acc)
+                await db.commit()
+                success.append(f"{phone} -> proxy {proxy.id}")
+                await asyncio.sleep(1)
+            except Exception as e:
+                failed.append(f"{base}: {str(e)}")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return {
+        "success": len(success),
+        "dead_count": len(dead),
+        "failed_count": len(failed),
+        "ok_list": success,
+        "dead": dead,
+        "failed": failed,
+        "msg": f"导入活跃 {len(success)}，跳过死号 {len(dead)}，失败 {len(failed)}",
+    }
 

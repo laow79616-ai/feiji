@@ -79,16 +79,16 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 <button onclick="verifyCode()" class="btn-success px-5 py-2 rounded">确认登录</button>
 <p id="verifyMsg" class="mt-2 text-sm text-green-400"></p>
 </div>
-</div>
 
-
-    <div class="card rounded-xl p-5 mt-4">
+    <div id="zipImportBox" class="card rounded-xl p-5 mt-4">
       <h3 class="font-semibold mb-2 text-sm">上传 ZIP 批量导入（.session + .json）</h3>
-      <p class="text-xs text-gray-400 mb-2">ZIP 内每个号一对文件：手机号.session 和 手机号.json。使用上方所选 API 与代理。</p>
+      <p class="text-xs text-gray-400 mb-2">死号不导入，活号自动分配到未满线路。</p>
       <input type="file" id="zipFile" accept=".zip" class="text-sm mb-3">
-      <button onclick="importZip()" class="btn-primary px-5 py-2 rounded">上传并导入</button>
+      <button type="button" onclick="importZip()" class="btn-primary px-5 py-2 rounded">上传并导入</button>
       <pre id="zipResult" class="mt-2 text-xs bg-black/30 p-2 rounded max-h-40 overflow-auto"></pre>
     </div>
+
+</div>
 
 <div id="panel-apis" class="panel hidden">
 <div class="card rounded-xl p-5 mb-4">
@@ -454,7 +454,7 @@ async function verifyCode(){
 }
 async function loadApis(){
   const list=await(await fetch('/pools/apis')).json();
-  document.getElementById('apiList').innerHTML=list.map(a=>`<div class="bg-[#0f172a] rounded px-3 py-2">${a.name} · 剩${a.remain}</div>`).join('')||'<p class="text-gray-500">暂无</p>';
+  document.getElementById('apiList').innerHTML=list.map(a=>`<div class="bg-[#0f172a] rounded px-3 py-2">${a.name} · 已用${a.used||0} · 剩${Math.max(0,a.remain!=null?a.remain:10-(a.used||0))}${(a.used||0)>10?' · 已超额':''}</div>`).join('')||'<p class="text-gray-500">暂无</p>';
   const sel=document.getElementById('selectApi');
   if(sel)sel.innerHTML=list.filter(a=>a.remain>0).map(a=>`<option value="${a.id}">${a.name}（剩${a.remain}）</option>`).join('');
 }
@@ -467,7 +467,7 @@ async function batchAddApis(){
 }
 async function loadProxies(){
   const list=await(await fetch('/pools/proxies')).json();
-  document.getElementById('proxyList').innerHTML=list.map(p=>`<div class="bg-[#0f172a] rounded px-3 py-2">${p.name} · 剩${p.remain}</div>`).join('')||'<p class="text-gray-500">暂无</p>';
+  document.getElementById('proxyList').innerHTML=list.map(p=>`<div class="bg-[#0f172a] rounded px-3 py-2">${p.name} · 共10 · 已用${p.used||0} · 剩${Math.max(0,p.remain!=null?p.remain:10-(p.used||0))}</div>`).join('')||'<p class="text-gray-500">暂无</p>';
   const sel=document.getElementById('selectProxy');
   if(sel)sel.innerHTML=list.filter(p=>p.remain>0).map(p=>`<option value="${p.id}">${p.name}（剩${p.remain}）</option>`).join('');
 }

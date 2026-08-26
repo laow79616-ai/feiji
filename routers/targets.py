@@ -132,6 +132,31 @@ async def _run_join_job(job_id: str, session_names: list, links: list, interval:
     job["status"] = "stopped" if job.get("stop") else "finished"
     job["current"] = ""
     job["finished_at"] = datetime.now(timezone.utc).isoformat()
+    # 写入持久化记录
+    try:
+        import sqlite3, json
+        conn = sqlite3.connect("/opt/telegram_manager/telegram_manager.db")
+        conn.execute(
+            """INSERT INTO join_records
+               (job_id, total, success, failed, interval_sec, status, targets, created_at, finished_at, detail_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                job_id,
+                job.get("total", 0),
+                job.get("success", 0),
+                job.get("failed", 0),
+                job.get("interval"),
+                job["status"],
+                ",".join(links) if links else "",
+                job.get("created_at"),
+                job["finished_at"],
+                json.dumps(job.get("details", [])[-200:], ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("join_record save error", e)
 
 
 @router.post("/join/start")
@@ -282,3 +307,18 @@ async def target_members(target_id: int, db: AsyncSession = Depends(get_db)):
             last_err = str(e)
             continue
     return {"members": None, "msg": last_err or "全部监听号查询失败"}
+
+
+@router.get("/join/records")
+async def list_join_records(limit: int = 50):
+    """历史加入记录：成功/失败数量"""
+    import sqlite3
+    conn = sqlite3.connect("/opt/telegram_manager/telegram_manager.db")
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, job_id, total, success, failed, interval_sec, status, targets, created_at, finished_at FROM join_records ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+

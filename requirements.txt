@@ -1,7 +1,8 @@
-telethon
-fastapi
-uvicorn
-sqlalchemy
+PySocks
 aiosqlite
+fastapi
+pydanticpython-socks[asyncio]
 python-multipart
-pydantic
+sqlalchemy
+telethon
+uvicorn

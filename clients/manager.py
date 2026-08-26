@@ -19,28 +19,47 @@ code_cache: Dict[str, List[dict]] = {}
 
 
 def parse_proxy(proxy_str: str):
+    """返回 Telethon 可用的 proxy 元组: (type, addr, port, rdns, user, pwd)"""
     if not proxy_str:
         return None
-    parts = proxy_str.strip().split(":")
-    if len(parts) == 4:
-        ip, port, user, password = parts
-        return {
-            'proxy_type': 'socks5',
-            'addr': ip,
-            'port': int(port),
-            'username': user,
-            'password': password,
-            'rdns': True
-        }
-    elif len(parts) == 2:
-        ip, port = parts
-        return {
-            'proxy_type': 'socks5',
-            'addr': ip,
-            'port': int(port),
-            'rdns': True
-        }
-    return None
+    try:
+        import socks
+    except Exception:
+        socks = None
+    s = proxy_str.strip()
+    ptype = None
+    if socks:
+        ptype = socks.SOCKS5
+    else:
+        ptype = 2  # socks.SOCKS5
+    addr = port = user = pwd = None
+    if "://" in s:
+        from urllib.parse import urlparse, unquote
+        u = urlparse(s)
+        addr = u.hostname
+        port = u.port
+        user = unquote(u.username) if u.username else None
+        pwd = unquote(u.password) if u.password else None
+        scheme = (u.scheme or "socks5").lower()
+        if socks:
+            if "http" in scheme:
+                ptype = socks.HTTP
+            elif "socks4" in scheme:
+                ptype = socks.SOCKS4
+            else:
+                ptype = socks.SOCKS5
+    else:
+        parts = [x.strip() for x in s.split(":")]
+        if len(parts) == 4:
+            addr, port, user, pwd = parts[0], int(parts[1]), parts[2], parts[3]
+        elif len(parts) == 2:
+            addr, port = parts[0], int(parts[1])
+        else:
+            return None
+        port = int(port)
+    if not addr or not port:
+        return None
+    return (ptype, addr, int(port), True, user, pwd)
 
 
 class ClientManager:

@@ -16,6 +16,27 @@ router = APIRouter(prefix="/targets", tags=["目标群组频道"])
 
 join_jobs = {}
 
+import json as _json
+from datetime import datetime, timezone
+
+def _job_save(job, session_names=None, links=None, interval=None):
+    import sqlite3
+    conn = sqlite3.connect("/opt/telegram_manager/telegram_manager.db")
+    conn.execute("""INSERT OR REPLACE INTO join_jobs_db
+        (id,status,session_names,links,interval_sec,total,done,success,failed,current,details,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+        job["id"], job.get("status"),
+        _json.dumps(session_names or job.get("session_names") or []),
+        _json.dumps(links or job.get("links") or []),
+        interval if interval is not None else job.get("interval"),
+        job.get("total",0), job.get("done",0), job.get("success",0), job.get("failed",0),
+        job.get("current") or "",
+        _json.dumps(job.get("details") or [], ensure_ascii=False),
+        job.get("created_at"), datetime.now(timezone.utc).isoformat(),
+    ))
+    conn.commit(); conn.close()
+
+
 
 class TargetCreate(BaseModel):
     name: str
@@ -144,6 +165,13 @@ async def _run_join_job(job_id: str, session_names: list, links: list, interval:
                     job["success"] += 1
                 else:
                     job["failed"] += 1
+                job["session_names"]=session_names
+                job["links"]=links
+                job["interval"]=interval
+                try:
+                    _job_save(job, session_names, links, interval)
+                except Exception as e:
+                    print("job save", e)
                 # 已在群：快速跳过；真正新加入才间隔
                 if already:
                     await asyncio.sleep(0.3)
@@ -153,6 +181,10 @@ async def _run_join_job(job_id: str, session_names: list, links: list, interval:
                     await asyncio.sleep(2)
     finally:
         job["status"] = "stopped" if job.get("stop") else "finished"
+        try:
+            _job_save(job, session_names, links, interval)
+        except Exception:
+            pass
         job["current"] = ""
         job["finished_at"] = datetime.now(timezone.utc).isoformat()
         try:
@@ -343,3 +375,34 @@ async def list_join_records(limit: int = 50):
     conn.close()
     return [dict(r) for r in rows]
 
+
+
+async def resume_join_jobs():
+    import sqlite3, json, asyncio
+    try:
+        conn = sqlite3.connect("/opt/telegram_manager/telegram_manager.db")
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM join_jobs_db WHERE status IN ('running','pending')").fetchall()
+        conn.close()
+    except Exception as e:
+        print("resume load error", e)
+        return
+    for r in rows:
+        names = json.loads(r["session_names"] or "[]")
+        links = json.loads(r["links"] or "[]")
+        job = {
+            "id": r["id"], "status": "running",
+            "total": r["total"] or 0, "done": r["done"] or 0,
+            "success": r["success"] or 0, "failed": r["failed"] or 0,
+            "details": json.loads(r["details"] or "[]"),
+            "current": "", "stop": False,
+            "session_names": names, "links": links,
+            "interval": r["interval_sec"] or 180,
+        }
+        join_jobs[r["id"]] = job
+        done = r["done"] or 0
+        nlink = max(len(links), 1)
+        skip = min(done, len(names) * nlink)
+        remain = names[skip // nlink:]
+        print("恢复加入任务", r["id"], "剩余号", len(remain))
+        asyncio.create_task(_run_join_job(r["id"], remain, links, r["interval_sec"] or 180))

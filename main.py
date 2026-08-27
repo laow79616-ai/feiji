@@ -17,6 +17,9 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.on_event("startup")
 async def startup():
+    import asyncio
+    from routers.targets import resume_join_jobs
+    asyncio.create_task(resume_join_jobs())
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

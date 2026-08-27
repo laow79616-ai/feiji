@@ -147,6 +147,14 @@ function switchTab(name){
   document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden'));
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
   document.getElementById('panel-'+name).classList.remove('hidden');
+
+  if(name==='join'){
+    fetch('/targets/join/jobs').then(r=>r.json()).then(list=>{
+      const run=(list||[]).find(j=>j.status==='running'||j.status==='pending');
+      if(run){ currentJoinJob=run.id; if(typeof startJoinPoll==='function') startJoinPoll(run.id); }
+    }).catch(()=>{});
+  }
+
   document.getElementById('tab-'+name).classList.add('active');
   if(name==='accounts')loadAccounts();
   if(name==='apis')loadApis();

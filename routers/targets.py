@@ -107,57 +107,78 @@ async def leave_targets(req: BatchJoinRequest, db: AsyncSession = Depends(get_db
 
 
 async def _run_join_job(job_id: str, session_names: list, links: list, interval: int):
+    import asyncio
+    from datetime import datetime, timezone
+    from clients.manager import ClientManager
     job = join_jobs[job_id]
     job["status"] = "running"
-    job["started_at"] = datetime.now(timezone.utc).isoformat()
-    for session_name in session_names:
-        if job.get("stop"):
-            break
-        for link in links:
+    job["details"] = []
+    job["done"] = 0
+    job["success"] = 0
+    job["failed"] = 0
+    job["created_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        for session_name in session_names:
             if job.get("stop"):
                 break
-            job["current"] = f"{session_name} → {link}"
-            try:
-                result = await ClientManager.join_group_or_channel(session_name, link)
-            except Exception as e:
-                result = {"success": False, "msg": str(e)}
-            item = {"account": session_name, "link": link, **result}
-            job["details"].append(item)
-            if result.get("success"):
-                job["success"] += 1
-            else:
-                job["failed"] += 1
-            job["done"] += 1
-            await asyncio.sleep(max(1, int(interval)))
-    job["status"] = "stopped" if job.get("stop") else "finished"
-    job["current"] = ""
-    job["finished_at"] = datetime.now(timezone.utc).isoformat()
-    # 写入持久化记录
-    try:
-        import sqlite3, json
-        conn = sqlite3.connect("/opt/telegram_manager/telegram_manager.db")
-        conn.execute(
-            """INSERT INTO join_records
-               (job_id, total, success, failed, interval_sec, status, targets, created_at, finished_at, detail_json)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (
-                job_id,
-                job.get("total", 0),
-                job.get("success", 0),
-                job.get("failed", 0),
-                job.get("interval"),
-                job["status"],
-                ",".join(links) if links else "",
-                job.get("created_at"),
-                job["finished_at"],
-                json.dumps(job.get("details", [])[-200:], ensure_ascii=False),
-            ),
-        )
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print("join_record save error", e)
-
+            for link in links:
+                if job.get("stop"):
+                    break
+                job["current"] = f"{session_name} -> {link}"
+                try:
+                    result = await ClientManager.join_group_or_channel(session_name, link)
+                except Exception as e:
+                    result = {"success": False, "msg": str(e)}
+                msg = (result.get("msg") or "")
+                already = any(k in msg for k in ["已经是成员", "已在群", "ALREADY_PARTICIPANT", "already"])
+                item = {
+                    "session_name": session_name,
+                    "link": link,
+                    "success": bool(result.get("success")),
+                    "already": already,
+                    "msg": msg,
+                }
+                job["details"].append(item)
+                job["done"] += 1
+                if result.get("success"):
+                    job["success"] += 1
+                else:
+                    job["failed"] += 1
+                # 已在群：快速跳过；真正新加入才间隔
+                if already:
+                    await asyncio.sleep(0.3)
+                elif result.get("success"):
+                    await asyncio.sleep(max(1, int(interval)))
+                else:
+                    await asyncio.sleep(2)
+    finally:
+        job["status"] = "stopped" if job.get("stop") else "finished"
+        job["current"] = ""
+        job["finished_at"] = datetime.now(timezone.utc).isoformat()
+        try:
+            import sqlite3, json
+            conn = sqlite3.connect("/opt/telegram_manager/telegram_manager.db")
+            conn.execute(
+                """INSERT INTO join_records
+                   (job_id, total, success, failed, interval_sec, status, targets, created_at, finished_at, detail_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    job_id,
+                    job.get("total", 0),
+                    job.get("success", 0),
+                    job.get("failed", 0),
+                    interval,
+                    job["status"],
+                    ",".join(links),
+                    job.get("created_at"),
+                    job["finished_at"],
+                    json.dumps(job.get("details", [])[-200:], ensure_ascii=False),
+                ),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print("join_record save error", e)
 
 @router.post("/join/start")
 async def start_join_job(req: JoinJobRequest, db: AsyncSession = Depends(get_db)):

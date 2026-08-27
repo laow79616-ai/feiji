@@ -9,3 +9,13 @@ Base = declarative_base()
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
+
+# 后台任务用
+try:
+    async_session = AsyncSessionLocal
+except NameError:
+    try:
+        async_session = async_session_maker
+    except NameError:
+        async_session = None
+

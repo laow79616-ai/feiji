@@ -368,7 +368,7 @@ async def import_zip(
         for p in proxies:
             cr = await db.execute(select(Account).where(Account.proxy_id == p.id))
             used = len(list(cr.scalars().all()))
-            if used < 10:
+            if used < 15:
                 out.append((p, used))
         return out
 
@@ -567,14 +567,21 @@ async def _run_import_job(job_id, zip_path, tmpdir, api_id, proxy_id):
     job["status"] = "running"
     try:
         # 动态调用：构造一个假 UploadFile 不可行，改为把 zip 交给同步导入核心
-        from database import async_session
-        async with async_session() as db:
+        from database import get_db
+        agen = get_db()
+        db = await agen.__anext__()
+        try:
             class _F:
                 filename = "upload.zip"
                 async def read(self):
                     with open(zip_path, "rb") as f:
                         return f.read()
             result = await import_zip(_F(), api_id, proxy_id, db)
+        finally:
+            try:
+                await agen.aclose()
+            except Exception:
+                pass
         job["success"] = result.get("success", 0)
         job["dead"] = result.get("dead_count", 0)
         job["failed"] = result.get("failed_count", 0)

@@ -96,7 +96,7 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 <button onclick="batchAddApis()" class="btn-primary px-5 py-2 rounded">批量添加</button>
 <p id="apiMsg" class="mt-2 text-sm text-green-400"></p>
 </div>
-<div class="card rounded-xl p-5"><div id="apiList" class="space-y-2 text-sm"></div></div>
+<div class="card rounded-xl p-5"><div id="apiPoolSummary" class="text-xs text-gray-400 mb-2"></div><div id="apiList" class="space-y-2 text-sm"></div></div>
 </div>
 
 <div id="panel-proxies" class="panel hidden">
@@ -105,7 +105,7 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 <button onclick="batchAddProxies()" class="btn-primary px-5 py-2 rounded">批量添加</button>
 <p id="proxyMsg" class="mt-2 text-sm text-green-400"></p>
 </div>
-<div class="card rounded-xl p-5"><div id="proxyList" class="space-y-2 text-sm"></div></div>
+<div class="card rounded-xl p-5"><div id="proxyPoolSummary" class="text-xs text-gray-400 mb-2"></div><div id="proxyList" class="space-y-2 text-sm"></div></div>
 </div>
 
 <div id="panel-targets" class="panel hidden">
@@ -135,7 +135,7 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
   <button onclick="doLeave()" class="px-6 py-2 rounded bg-red-800">一键退出</button>
 </div>
 <div id="joinStatus" class="text-sm space-y-1 mb-3 max-h-40 overflow-y-auto"></div>
-<pre id="joinResult" class="mt-2 text-xs bg-black/30 p-3 rounded max-h-48 overflow-auto"></pre>
+<div id="joinLiveList" class="mt-3 max-h-64 overflow-y-auto text-sm space-y-1"></div><pre id="joinResult" class="mt-2 text-xs bg-black/30 p-3 rounded max-h-48 overflow-auto"></pre>
 </div>
 </div>
 </div>
@@ -454,7 +454,9 @@ async function verifyCode(){
 }
 async function loadApis(){
   const list=await(await fetch('/pools/apis')).json();
-  document.getElementById('apiList').innerHTML=list.map(a=>`<div class="bg-[#0f172a] rounded px-3 py-2">${a.name} · 已用${a.used||0} · 剩${Math.max(0,a.remain!=null?a.remain:10-(a.used||0))}${(a.used||0)>10?' · 已超额':''}</div>`).join('')||'<p class="text-gray-500">暂无</p>';
+  var _as=document.getElementById('apiPoolSummary');
+  if(_as){var u=list.reduce((s,a)=>s+(a.used||0),0);_as.textContent='API 共 '+list.length+' 条 · 号 '+u+' 个';}
+  document.getElementById('apiList').innerHTML=list.map(a=>`<div class="bg-[#0f172a] rounded px-3 py-2">${a.name} · 已用${a.used||0} · 剩${Math.max(0,a.remain!=null?a.remain:15-(a.used||0))}${(a.used||0)>15?' · 已超额':''}</div>`).join('')||'<p class="text-gray-500">暂无</p>';
   const sel=document.getElementById('selectApi');
   if(sel)sel.innerHTML=list.filter(a=>a.remain>0).map(a=>`<option value="${a.id}">${a.name}（剩${a.remain}）</option>`).join('');
 }
@@ -467,7 +469,9 @@ async function batchAddApis(){
 }
 async function loadProxies(){
   const list=await(await fetch('/pools/proxies')).json();
-  document.getElementById('proxyList').innerHTML=list.map(p=>`<div class="bg-[#0f172a] rounded px-3 py-2">${p.name} · 共10 · 已用${p.used||0} · 剩${Math.max(0,p.remain!=null?p.remain:10-(p.used||0))}</div>`).join('')||'<p class="text-gray-500">暂无</p>';
+  var _ps=document.getElementById('proxyPoolSummary');
+  if(_ps){var u=list.reduce((s,p)=>s+(p.used||0),0);_ps.textContent='代理 共 '+list.length+' 条 · 号 '+u+' 个';}
+  document.getElementById('proxyList').innerHTML=list.map(p=>`<div class="bg-[#0f172a] rounded px-3 py-2">${p.name} · 共15 · 已用${p.used||0} · 剩${Math.max(0,p.remain!=null?p.remain:15-(p.used||0))}</div>`).join('')||'<p class="text-gray-500">暂无</p>';
   const sel=document.getElementById('selectProxy');
   if(sel)sel.innerHTML=list.filter(p=>p.remain>0).map(p=>`<option value="${p.id}">${p.name}（剩${p.remain}）</option>`).join('');
 }
@@ -575,65 +579,62 @@ async function setMonitor(session){
 
 async function importZip(){
   const f=document.getElementById('zipFile').files[0];
-  const api_id=parseInt(document.getElementById('selectApi').value);
-  const proxy_id=parseInt(document.getElementById('selectProxy').value);
   if(!f) return alert('请选择 ZIP');
-  if(!api_id||!proxy_id) return alert('请选择 API 和代理');
   const fd=new FormData();
   fd.append('file', f);
-  fd.append('api_id', api_id);
-  fd.append('proxy_id', proxy_id);
-  document.getElementById('zipResult').textContent='上传中...';
+  const apiEl=document.getElementById('selectApi');
+  const proxyEl=document.getElementById('selectProxy');
+  if(apiEl && apiEl.value) fd.append('api_id', apiEl.value);
+  if(proxyEl && proxyEl.value) fd.append('proxy_id', proxyEl.value);
+  const box=document.getElementById('zipResult');
+  if(box) box.textContent='上传中...';
   try{
-    const d=await(await fetch('/accounts/import-zip',{method:'POST',body:fd})).json();
-    document.getElementById('zipResult').textContent=JSON.stringify(d,null,2);
-    if(d.success) loadAccounts();
-  }catch(e){
-    document.getElementById('zipResult').textContent=String(e);
-  }
+    const startRes=await fetch('/accounts/import-zip/start',{method:'POST',body:fd});
+    const text=await startRes.text();
+    let d;
+    try{ d=JSON.parse(text); }catch(e){
+      if(box) box.textContent='返回不是JSON，请重新登录后再试';
+      return;
+    }
+    if(!d.job_id){ if(box) box.textContent=JSON.stringify(d,null,2); return; }
+    if(box) box.textContent='后台导入中 job='+d.job_id;
+    const poll=async()=>{
+      const s=await(await fetch('/accounts/import-zip/status/'+d.job_id)).json();
+      let t='状态:'+(s.status||'')+'\n成功 '+(s.success||0)+' / 死号 '+(s.dead||0)+' / 失败 '+(s.failed||0)+'\n'+(s.msg||'');
+      if(s.details&&s.details.length) t += '\n' + s.details.slice(-20).join(' | ');
+      if(box) box.textContent=t;
+      if(s.status==='running'||s.status==='pending') setTimeout(poll,3000);
+      else if(typeof loadAccounts==='function') loadAccounts();
+    };
+    poll();
+  }catch(e){ if(box) box.textContent=String(e); }
 }
 
-
-async function checkHealthGroup(proxyName){
-  if(!confirm('检测该线路账号是否活跃？可能需要几分钟')) return;
-  const accs=(allGroups[proxyName]||[]).map(a=>a.session_name);
-  if(!accs.length) return alert('无账号');
-  const res=await fetch('/accounts/check-health',{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({session_names:accs})
-  });
-  // 若后端要的是 query/body 不同，兼容
-  let d;
-  try{ d=await res.json(); }catch(e){ alert('请求失败'); return; }
-  alert('活跃 '+(d.active||0)+' / 已死 '+(d.dead||0)+' / 共 '+(d.total||0));
-  loadAccounts();
-}
 
 async function doJoin(){
-  const accounts=[...document.getElementById('joinAccounts').selectedOptions].map(o=>o.value);
-  const targetIds=[...document.getElementById('joinTargets').selectedOptions].map(o=>parseInt(o.value));
-  const interval=parseInt(document.getElementById('joinInterval')?.value||180);
-  if(!accounts.length||!targetIds.length)return alert('请选择水军和目标');
-  const statusEl=document.getElementById('joinStatus');
-  if(statusEl) statusEl.innerHTML='<span class="text-yellow-400">创建任务中...</span>';
+  const accEl=document.getElementById('joinAccounts');
+  const tgtEl=document.getElementById('joinTargets');
+  const intEl=document.getElementById('joinInterval');
+  if(!accEl||!tgtEl){ alert('找不到选择框'); return; }
+  const session_names=[...accEl.selectedOptions].map(o=>o.value).filter(Boolean);
+  const target_ids=[...tgtEl.selectedOptions].map(o=>parseInt(o.value)).filter(n=>n);
+  const interval=parseInt((intEl&&intEl.value)||180);
+  if(!session_names.length){ alert('请选择水军'); return; }
+  if(!target_ids.length){ alert('请选择目标'); return; }
+  if(!confirm('开始加入 '+session_names.length+' 个号到 '+target_ids.length+' 个目标，间隔 '+interval+' 秒？')) return;
+  const box=document.getElementById('joinStatus')||document.getElementById('joinResult');
   try{
-    const d=await(await fetch('/targets/join/start',{
+    const res=await fetch('/targets/join/start',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({session_names:accounts,target_ids:targetIds,interval:interval})
-    })).json();
-    if(d.job_id){
-      currentJoinJob=d.job_id;
-      document.getElementById('joinResult').textContent=JSON.stringify(d,null,2);
-      if(statusEl) statusEl.innerHTML='<span class="text-green-400">任务已开始 '+d.job_id+' · 共'+d.total+'个 · 间隔'+interval+'秒</span> <button onclick="stopJoinJob()" class="text-xs px-2 py-1 bg-red-800 rounded ml-2">停止</button>';
-      startJoinPoll();
-    }else{
-      if(statusEl) statusEl.innerHTML='<span class="text-red-400">'+(d.detail||JSON.stringify(d))+'</span>';
-    }
-  }catch(e){
-    if(statusEl) statusEl.innerHTML='<span class="text-red-400">请求失败</span>';
-    document.getElementById('joinResult').textContent=String(e);
-  }
+      body:JSON.stringify({session_names, target_ids, interval})
+    });
+    const text=await res.text();
+    let d; try{ d=JSON.parse(text); }catch(e){ alert('请重新登录'); return; }
+    if(box) box.textContent=JSON.stringify(d,null,2);
+    if(d.job_id){ currentJoinJob=d.job_id; if(typeof startJoinPoll==='function') startJoinPoll(d.job_id); }
+    else alert(d.msg||JSON.stringify(d));
+  }catch(e){ alert('启动失败 '+e); }
 }
 
 function startJoinPoll(){
@@ -646,25 +647,24 @@ async function pollJoinJob(){
   if(!currentJoinJob) return;
   try{
     const j=await(await fetch('/targets/join/status/'+currentJoinJob)).json();
-    const statusEl=document.getElementById('joinStatus');
-    const pct=j.total?Math.round(j.done/j.total*100):0;
-    let html='<div class="mb-1">状态: <b>'+j.status+'</b> · 进度 '+j.done+'/'+j.total+' ('+pct+'%) · 成功'+j.success+' 失败'+j.failed+'</div>';
-    if(j.current) html+='<div class="text-xs text-gray-400 mb-1">当前: '+j.current+'</div>';
-    html+='<div class="w-full bg-gray-800 rounded h-2 mb-2"><div class="bg-blue-600 h-2 rounded" style="width:'+pct+'%"></div></div>';
-    if(j.status==='running'||j.status==='pending'){
-      html+='<button onclick="stopJoinJob()" class="text-xs px-2 py-1 bg-red-800 rounded">停止任务</button>';
-    }
-    if(j.details && j.details.length){
-      html+='<div class="max-h-32 overflow-y-auto text-xs mt-2">'+j.details.slice(-20).map(r=>{
-        const ok=r.success;
-        return '<div class="'+(ok?'text-green-400':'text-red-400')+'">'+(ok?'✓':'✗')+' '+r.account+' → '+(r.msg||'')+'</div>';
-      }).join('')+'</div>';
-    }
-    if(statusEl) statusEl.innerHTML=html;
-    document.getElementById('joinResult').textContent=JSON.stringify(j,null,2);
-    if(j.status==='finished'||j.status==='stopped'){
-      clearInterval(joinPollTimer);
-      joinPollTimer=null;
+    const box=document.getElementById('joinStatus')||document.getElementById('joinResult');
+    const done=j.done||0, total=j.total||0, ok=j.success||0, fail=j.failed||0;
+    if(box) box.textContent='状态:'+j.status+' · 进度 '+done+'/'+total+' · 成功'+ok+' 失败'+fail+' · '+(j.current||'');
+    const list=document.getElementById('joinLiveList');
+    if(list){
+      const details=j.details||[];
+      const waiting=Math.max(0, total-details.length);
+      let html='<div class="text-xs text-gray-400 mb-2">等待 '+waiting+' · 已处理 '+details.length+'</div>';
+      html += details.slice().reverse().slice(0,80).map(d=>{
+        const msg=(d.msg||d.message||'').toString();
+        let st='等待', color='text-gray-400';
+        if(d.success===true || msg.indexOf('加入成功')>=0){ st='已加入'; color='text-green-400'; }
+        if(msg.indexOf('已经是成员')>=0 || msg.indexOf('已在')>=0 || msg.indexOf('ALREADY')>=0){ st='已在群'; color='text-blue-400'; }
+        if(d.success===false){ st='失败'; color='text-red-400'; }
+        const name=d.session_name||d.phone||d.account||'';
+        return '<div class="flex justify-between px-2 py-1 bg-[#0f172a] rounded"><span>'+name+'</span><span class="'+color+'">'+st+'</span></div>';
+      }).join('');
+      list.innerHTML=html;
     }
   }catch(e){}
 }

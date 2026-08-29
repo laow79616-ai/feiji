@@ -182,8 +182,10 @@ class ClientManager:
                     hash_code = link.split("+")[-1]
                 await client(ImportChatInviteRequest(hash_code))
             else:
-                username = link.replace("https://t.me/", "").replace("@", "").strip("/")
-                await client(JoinChannelRequest(username))
+                username = link.replace("https://t.me/", "").replace("http://t.me/", "").replace("t.me/", "").replace("@", "").strip("/")
+                username = username.split("?")[0].strip()
+                entity = await client.get_entity(username)
+                await client(JoinChannelRequest(entity))
             return {"success": True, "msg": "加入成功"}
         except UserAlreadyParticipantError:
             return {"success": True, "msg": "已经是成员"}

@@ -16,6 +16,27 @@ router = APIRouter(prefix="/targets", tags=["目标群组频道"])
 
 join_jobs = {}
 
+def memory_get_skip(link):
+    import sqlite3
+    conn = sqlite3.connect("/opt/telegram_manager/telegram_manager.db")
+    rows = conn.execute(
+        "SELECT session_name, status FROM join_memory WHERE link=? AND status IN ('joined','already','bad')",
+        (link,),
+    ).fetchall()
+    conn.close()
+    return {r[0]: r[1] for r in rows}
+
+def memory_put(session_name, link, status, msg=""):
+    import sqlite3
+    from datetime import datetime, timezone
+    conn = sqlite3.connect("/opt/telegram_manager/telegram_manager.db")
+    conn.execute(
+        "INSERT OR REPLACE INTO join_memory(session_name,link,status,msg,updated_at) VALUES(?,?,?,?,?)",
+        (session_name, link, status, str(msg)[:300], datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit(); conn.close()
+
+
 import json as _json
 from datetime import datetime, timezone
 
@@ -160,6 +181,14 @@ async def _run_join_job(job_id: str, session_names: list, links: list, interval:
                     "msg": msg,
                 }
                 job["details"].append(item)
+                try:
+                    st = "already" if already else ("joined" if result.get("success") else "failed")
+                    low = (msg or "").lower()
+                    if any(k in low for k in ["session", "auth_key", "revoked", "deactivated", "邀请链接无效"]):
+                        st = "bad"
+                    memory_put(session_name, link, st, msg)
+                except Exception as e:
+                    print("memory_put", e)
                 job["done"] += 1
                 if result.get("success"):
                     job["success"] += 1
@@ -173,6 +202,16 @@ async def _run_join_job(job_id: str, session_names: list, links: list, interval:
                 except Exception as e:
                     print("job save", e)
                 # 已在群：快速跳过；真正新加入才间隔
+                try:
+                    from clients.manager import clients
+                    if session_name in clients:
+                        try:
+                            await clients[session_name].disconnect()
+                        except Exception:
+                            pass
+                        clients.pop(session_name, None)
+                except Exception:
+                    pass
                 if already:
                     await asyncio.sleep(0.3)
                 elif result.get("success"):
@@ -221,6 +260,12 @@ async def start_join_job(req: JoinJobRequest, db: AsyncSession = Depends(get_db)
     if not targets:
         raise HTTPException(400, "目标不存在")
     links = [t.link for t in targets]
+    skip_map = {}
+    for link in links:
+        skip_map.update(memory_get_skip(link))
+    names = [s for s in req.session_names if s not in skip_map]
+    skipped = len(req.session_names) - len(names)
+    req.session_names = names
     total = len(req.session_names) * len(links)
     job_id = uuid.uuid4().hex[:12]
     join_jobs[job_id] = {
@@ -237,7 +282,7 @@ async def start_join_job(req: JoinJobRequest, db: AsyncSession = Depends(get_db)
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     asyncio.create_task(_run_join_job(job_id, req.session_names, links, req.interval))
-    return {"job_id": job_id, "total": total, "interval": req.interval, "msg": "任务已开始"}
+    return {"job_id": job_id, "total": total, "skipped": skipped if "skipped" in dir() else 0, "interval": req.interval, "msg": "任务已开始"}
 
 
 @router.get("/join/status/{job_id}")

@@ -133,6 +133,7 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
   <input id="joinInterval" type="number" value="180" min="5" class="w-24 px-2 py-1 rounded text-sm">
   <button onclick="doJoin()" class="btn-primary px-6 py-2 rounded">开始批量加入</button>
   <button onclick="doLeave()" class="px-6 py-2 rounded bg-red-800">一键退出</button>
+  <button onclick="stopJoinJob()" class="px-6 py-2 rounded bg-orange-700">停止加入</button>
 </div>
 <div id="joinStatus" class="text-sm space-y-1 mb-3 max-h-40 overflow-y-auto"></div>
 <div id="joinLiveList" class="mt-3 max-h-64 overflow-y-auto text-sm space-y-1"></div><pre id="joinResult" class="mt-2 text-xs bg-black/30 p-3 rounded max-h-48 overflow-auto"></pre>

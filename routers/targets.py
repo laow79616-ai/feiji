@@ -173,6 +173,11 @@ async def _run_join_job(job_id: str, session_names: list, links: list, interval:
                     result = {"success": False, "msg": str(e)}
                 msg = (result.get("msg") or "")
                 already = any(k in msg for k in ["已经是成员", "已在群", "ALREADY_PARTICIPANT", "already"])
+                requested = "successfully requested to join" in (msg or "").lower()
+                if requested:
+                    result["success"] = True
+                    msg = "已申请加入，待审核"
+                    result["msg"] = msg
                 item = {
                     "session_name": session_name,
                     "link": link,

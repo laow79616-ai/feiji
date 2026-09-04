@@ -36,6 +36,7 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 <button onclick="switchTab('proxies')" id="tab-proxies" class="nav-item px-3 py-1.5 rounded-lg text-sm">代理池</button>
 <button onclick="switchTab('targets')" id="tab-targets" class="nav-item px-3 py-1.5 rounded-lg text-sm">目标</button>
 <button onclick="switchTab('join')" id="tab-join" class="nav-item px-3 py-1.5 rounded-lg text-sm">开始批量加入</button>
+    <a href="/logout" class="nav-item px-3 py-1.5 rounded-lg text-sm bg-red-800 ml-auto">退出</a>
 </div>
 
 <div id="panel-accounts" class="panel">
@@ -143,6 +144,27 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 
 <script>
 let allGroups={}, currentGroup=null, currentSession=null, currentChatId=null, allDialogs=[];
+
+
+async function checkHealthGroup(proxyName){
+  try{
+    let accs=[];
+    if(typeof allGroups!=='undefined' && allGroups[proxyName]) accs=allGroups[proxyName];
+    else if(typeof allAccounts!=='undefined') accs=allAccounts.filter(a=>(a.proxy_name||a.proxy||'')===proxyName);
+    const names=accs.map(a=>a.session_name).filter(Boolean);
+    if(!names.length) return alert('该组无账号：'+proxyName);
+    if(!confirm('检测线路【'+proxyName+'】共 '+names.length+' 个号？')) return;
+    const res=await fetch('/accounts/check-health',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_names:names})
+    });
+    const text=await res.text();
+    let d; try{ d=JSON.parse(text); }catch(e){ return alert('请重新登录'); }
+    alert('活跃 '+(d.active||0)+' / 死号 '+(d.dead||0)+' / 失败 '+(d.failed||0)+' / 共 '+(d.total||names.length));
+    if(typeof loadAccounts==='function') loadAccounts();
+  }catch(e){ alert('检测失败 '+e); }
+}
 
 function switchTab(name){
   document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden'));

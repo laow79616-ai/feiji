@@ -37,6 +37,7 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 <button onclick="switchTab('targets')" id="tab-targets" class="nav-item px-3 py-1.5 rounded-lg text-sm">目标</button>
 <button onclick="switchTab('join')" id="tab-join" class="nav-item px-3 py-1.5 rounded-lg text-sm">开始批量加入</button>
     <a href="/logout" class="nav-item px-3 py-1.5 rounded-lg text-sm bg-red-800 ml-auto">退出</a>
+    <button type="button" onclick="checkAllHealth()" class="nav-item px-3 py-1.5 rounded-lg text-sm bg-amber-700">一键全部检测</button>
 </div>
 
 <div id="panel-accounts" class="panel">
@@ -166,6 +167,26 @@ async function checkHealthGroup(proxyName){
   }catch(e){ alert('检测失败 '+e); }
 }
 
+
+async function checkAllHealth(){
+  if(!confirm('后台检测全部水军？测完自动标记死号，请勿同时整组上线')) return;
+  const r=await fetch('/accounts/check-all/start',{method:'POST'});
+  const d=await r.json();
+  if(!d.job_id) return alert(JSON.stringify(d));
+  alert('已开始后台检测 job='+d.job_id+' 共 '+(d.total||''));
+  const poll=async()=>{
+    const s=await(await fetch('/accounts/check-all/status/'+d.job_id)).json();
+    const el=document.getElementById('checkAllMsg');
+    if(el) el.textContent='检测 '+(s.done||0)+'/'+(s.total||0)+' 活'+(s.alive||0)+' 死'+(s.dead||0);
+    if(s.status==='running'||s.status==='pending') setTimeout(poll,3000);
+    else {
+      alert('检测完成 活 '+(s.alive||0)+' 死 '+(s.dead||0)+' 失败 '+(s.failed||0));
+      if(typeof loadAccounts==='function') loadAccounts();
+    }
+  };
+  poll();
+}
+
 function switchTab(name){
   document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden'));
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
@@ -206,7 +227,7 @@ async function loadAccounts(){
     const active=currentGroup===name?'active':'';
     return `<div class="group-item rounded-lg px-3 py-2 ${active}" onclick="selectGroup('${name.replace(/'/g,"\\'")}')">
       <div class="text-sm font-medium truncate">${i+1}组 · ${name}</div>
-      <div class="text-xs text-gray-400">${list.length}/10 · 在线${online}</div>
+      <div class="text-xs text-gray-400">${list.length}/15 · 在线${online} · 死号${list.filter(a=>a.health_status==='dead').length}</div>
     </div>`;
   }).join('')||'<p class="text-gray-500 text-sm">暂无线路</p>';
 
@@ -230,7 +251,7 @@ function selectGroup(name){
   let html=`<div class="flex justify-between items-center mb-4 flex-wrap gap-2">
     <div>
       <h3 class="font-semibold">${name}</h3>
-      <p class="text-xs text-gray-400">${list.length}/10 · 在线${online} · 剩余${remain}</p>
+      <p class="text-xs text-gray-400">${list.length}/15 · 在线${online} · 死号${list.filter(a=>a.health_status==='dead').length} · 剩余${remain}</p>
     </div>
     <div class="flex gap-2">
       <button onclick="lineOnline('${name.replace(/'/g,"\\'")}')" class="text-sm px-3 py-1.5 bg-green-700 rounded">整组上线</button>

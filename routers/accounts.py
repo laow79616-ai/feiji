@@ -195,12 +195,21 @@ async def line_online(proxy_name: str, db: AsyncSession = Depends(get_db)):
 
     success, failed = [], []
     for acc in accounts:
+        if (getattr(acc, "health_status", None) or "") == "dead":
+            failed.append(f"{acc.phone}: 已死/冻结，跳过上线")
+            acc.is_online = False
+            continue
         try:
             await ClientManager.reconnect(acc.session_name, proxy.proxy_str)
             acc.is_online = True
             success.append(acc.phone)
         except Exception as e:
-            failed.append(f"{acc.phone}: {str(e)}")
+            msg = str(e)
+            failed.append(f"{acc.phone}: {msg}")
+            acc.is_online = False
+            low = msg.lower()
+            if any(k in low for k in ["frozen","freeze","duplicated","revoked","deactivated","session 无效","unauthorized","auth_key"]):
+                acc.health_status = "dead"
 
     await db.commit()
     return {"success": success, "failed": failed}
@@ -321,7 +330,7 @@ async def check_health(req: CheckHealthRequest = None, db: AsyncSession = Depend
         except Exception as e:
             msg = str(e)
             # 常见失效关键字
-            dead_keys = ["AUTH_KEY", "SESSION_REVOKED", "USER_DEACTIVATED", "deactivated", "revoked", "unauthorized"]
+            dead_keys = ["AUTH_KEY", "SESSION_REVOKED", "USER_DEACTIVATED", "deactivated", "revoked", "unauthorized", "frozen", "freeze", "FROZEN"]
             if any(k.lower() in msg.lower() for k in dead_keys):
                 item["status"] = "dead"
                 acc.health_status = "dead"
@@ -462,7 +471,7 @@ async def import_zip(
                         pass
                 except Exception as e:
                     em = str(e)
-                    dead_keys = ["AUTH_KEY", "SESSION_REVOKED", "USER_DEACTIVATED", "deactivated", "revoked", "unauthorized"]
+                    dead_keys = ["AUTH_KEY", "SESSION_REVOKED", "USER_DEACTIVATED", "deactivated", "revoked", "unauthorized", "frozen", "freeze", "FROZEN"]
                     if any(k.lower() in em.lower() for k in dead_keys):
                         status = "dead"
                     else:
@@ -596,4 +605,88 @@ async def _run_import_job(job_id, zip_path, tmpdir, api_id, proxy_id):
     finally:
         import shutil
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+check_all_jobs = {}
+
+@router.post("/check-all/start")
+async def check_all_start(db: AsyncSession = Depends(get_db)):
+    import uuid, asyncio
+    from sqlalchemy import select
+    from models import Account
+    r = await db.execute(select(Account))
+    accs = r.scalars().all()
+    job_id = uuid.uuid4().hex[:12]
+    check_all_jobs[job_id] = {
+        "id": job_id, "status": "pending",
+        "total": len(accs), "done": 0, "alive": 0, "dead": 0, "failed": 0
+    }
+    names = [a.session_name for a in accs]
+    asyncio.create_task(_run_check_all(job_id, names))
+    return {"job_id": job_id, "total": len(names)}
+
+@router.get("/check-all/status/{job_id}")
+async def check_all_status(job_id: str):
+    job = check_all_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在")
+    return job
+
+async def _run_check_all(job_id, session_names):
+    import asyncio, sqlite3
+    from clients.manager import ClientManager, clients
+    job = check_all_jobs[job_id]
+    job["status"] = "running"
+    conn = sqlite3.connect("/opt/telegram_manager/telegram_manager.db")
+    for session_name in session_names:
+        row = conn.execute(
+            """SELECT a.phone, p.proxy_str FROM accounts a
+               LEFT JOIN proxies p ON a.proxy_id=p.id
+               WHERE a.session_name=?""",
+            (session_name,)
+        ).fetchone()
+        proxy_str = row[1] if row else None
+        status = "failed"
+        msg = ""
+        try:
+            await ClientManager.reconnect(session_name, proxy_str)
+            c = await ClientManager.get_client(session_name)
+            if c:
+                await c.get_me()
+                try:
+                    await c.get_dialogs(limit=1)
+                    from telethon.tl.functions.account import UpdateStatusRequest
+                    await c(UpdateStatusRequest(offline=True))
+                except Exception as e2:
+                    if any(k in str(e2).lower() for k in ["frozen", "freeze"]):
+                        raise e2
+                status = "alive"
+        except Exception as e:
+            msg = str(e)
+            low = msg.lower()
+            if any(k in low for k in ["duplicated","revoked","deactivated","session 无效","unauthorized","auth_key","frozen","freeze"]):
+                status = "dead"
+            else:
+                status = "failed"
+        finally:
+            if session_name in clients:
+                try:
+                    await clients[session_name].disconnect()
+                except Exception:
+                    pass
+                clients.pop(session_name, None)
+        job["done"] += 1
+        if status == "alive":
+            job["alive"] += 1
+            conn.execute("UPDATE accounts SET health_status='active', is_online=0 WHERE session_name=?", (session_name,))
+        elif status == "dead":
+            job["dead"] += 1
+            conn.execute("UPDATE accounts SET health_status='dead', is_online=0 WHERE session_name=?", (session_name,))
+        else:
+            job["failed"] += 1
+        conn.commit()
+        await asyncio.sleep(1)
+    conn.close()
+    job["status"] = "finished"
+
 

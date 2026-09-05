@@ -93,6 +93,8 @@ class ClientManager:
 
     @classmethod
     def _register_handlers(cls, client: TelegramClient, session_name: str):
+        if getattr(client, "_tg_handlers_ok", False):
+            return
         @client.on(events.NewMessage(incoming=True))
         async def handler(event):
             text = event.message.message or ""

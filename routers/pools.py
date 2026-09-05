@@ -146,6 +146,7 @@ async def list_proxies(db: AsyncSession = Depends(get_db)):
             "name": p.name,
             "proxy_str": p.proxy_str,
             "used": count,
+            "is_ok": bool(getattr(p,"is_ok",1)),
             "remain": MAX_PER_POOL - count
         })
     return data

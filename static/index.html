@@ -43,7 +43,7 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 <div id="panel-accounts" class="panel">
 <div class="flex gap-4" style="min-height:70vh">
   <!-- 左侧分组 -->
-  <div class="w-56 shrink-0">
+  <div class="w-80 shrink-0">
     <div class="card rounded-xl p-3 sticky top-20">
       <div class="flex justify-between items-center mb-3">
         <span class="font-semibold text-sm">线路分组</span>
@@ -240,7 +240,7 @@ async function loadAccounts(){
     const online=list.filter(a=>a.is_online).length;
     const active=currentGroup===name?'active':'';
     return `<div class="group-item rounded-lg px-3 py-2 ${active}" onclick="selectGroup('${name.replace(/'/g,"\\'")}')">
-      <div class="text-sm font-medium truncate ${ (window.proxyOkMap||{})[name]===false ? 'text-red-400' : 'text-green-400' }">${i+1}组 · ${name}</div>
+      <div class="text-sm font-medium whitespace-nowrap overflow-visible ${ (window.proxyOkMap||{})[name]===false ? 'text-red-400' : 'text-green-400' }">${i+1}组 · ${name}</div>
       <div class="text-xs text-gray-400">${list.length}/15 · 在线${online} · 死号${list.filter(a=>a.health_status==='dead').length}</div>
     </div>`;
   }).join('')||'<p class="text-gray-500 text-sm">暂无线路</p>';

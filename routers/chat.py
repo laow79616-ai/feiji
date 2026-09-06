@@ -53,14 +53,33 @@ async def get_messages(session_name: str, chat_id: int, limit: int = 40):
 @router.post("/profile/update")
 async def update_profile(req: UpdateProfileRequest):
     try:
+        from database import get_db
+        from models import Account, Proxy
+        from sqlalchemy import select
+        proxy_str = None
+        agen = get_db()
+        db = await agen.__anext__()
+        try:
+            r = await db.execute(select(Account).where(Account.session_name == req.session_name))
+            acc = r.scalar_one_or_none()
+            if acc and acc.proxy_id:
+                pr = await db.execute(select(Proxy).where(Proxy.id == acc.proxy_id))
+                px = pr.scalar_one_or_none()
+                proxy_str = px.proxy_str if px else None
+        finally:
+            try:
+                await agen.aclose()
+            except Exception:
+                pass
+        await ClientManager.reconnect(req.session_name, proxy_str)
         await ClientManager.update_profile(
             req.session_name,
-            first_name=req.first_name,
+            first_name=req.first_name or None,
             about=req.about
         )
-        return {"success": True, "msg": "资料已更新"}
+        return {"success": True, "ok": True, "msg": "资料已更新"}
     except Exception as e:
-        raise HTTPException(400, str(e))
+        return {"success": False, "ok": False, "msg": str(e)}
 
 
 @router.post("/profile/photo")
@@ -130,8 +149,26 @@ async def profile_photo_from_library(session_name: str = Form(...), filename: st
     if not os.path.exists(path):
         return {"ok": False, "msg": "图片不存在"}
     try:
-        await ClientManager.reconnect(session_name)
+        from database import get_db
+        from models import Account, Proxy
+        from sqlalchemy import select
+        proxy_str = None
+        agen = get_db()
+        db = await agen.__anext__()
+        try:
+            r = await db.execute(select(Account).where(Account.session_name == session_name))
+            acc = r.scalar_one_or_none()
+            if acc and acc.proxy_id:
+                pr = await db.execute(select(Proxy).where(Proxy.id == acc.proxy_id))
+                px = pr.scalar_one_or_none()
+                proxy_str = px.proxy_str if px else None
+        finally:
+            try:
+                await agen.aclose()
+            except Exception:
+                pass
+        await ClientManager.reconnect(session_name, proxy_str)
         await ClientManager.upload_profile_photo(session_name, path)
-        return {"ok": True}
+        return {"ok": True, "msg": "头像已更新"}
     except Exception as e:
         return {"ok": False, "msg": str(e)}

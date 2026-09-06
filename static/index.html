@@ -564,6 +564,14 @@ async function addTarget(){
   await fetch('/targets/',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,link})});
   document.getElementById('targetMsg').textContent='已添加';loadTargets();
 }
+
+async function deleteTarget(id){
+  if(!confirm('删除该目标？不会让水军退群，只删面板记录')) return;
+  const r=await fetch('/targets/'+id,{method:'DELETE'});
+  if(!r.ok){alert(await r.text());return;}
+  loadTargets();
+}
+
 async function loadTargets(){
   try{
     const list=await(await fetch('/targets/')).json();
@@ -577,7 +585,7 @@ async function loadTargets(){
           <div class="text-sm">${t.name}${t.member_count!=null?' <span class="text-green-400 text-xs">'+t.member_count+'人</span>':''}</div>
           <div class="text-xs text-gray-500">${t.link}</div>
         </div>
-        <button onclick="refreshMembers(${t.id})" class="text-xs px-2 py-1 bg-gray-700 rounded shrink-0">刷新人数</button>
+        <button onclick="refreshMembers(${t.id})" class="text-xs px-2 py-1 bg-gray-700 rounded shrink-0">刷新人数</button><button onclick="deleteTarget(${t.id})" class="text-xs px-2 py-1 bg-red-800 rounded ml-1">删除</button>
       </div>
     `).join('')||'<p class="text-gray-500">暂无</p>';
     const sel=document.getElementById('joinTargets');

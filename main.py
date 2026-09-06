@@ -22,6 +22,16 @@ async def startup():
     asyncio.create_task(resume_join_jobs())
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    try:
+        from sqlalchemy import update
+        from models import Account
+        from database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            await db.execute(update(Account).values(is_online=False))
+            await db.commit()
+            print("startup: 已清零在线状态")
+    except Exception as e:
+        print("startup reset online failed:", e)
 
 @app.get("/")
 async def index():

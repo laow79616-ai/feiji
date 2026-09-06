@@ -201,8 +201,22 @@ async def line_online(proxy_name: str, db: AsyncSession = Depends(get_db)):
             continue
         try:
             await ClientManager.reconnect(acc.session_name, proxy.proxy_str)
-            acc.is_online = True
-            success.append(acc.phone)
+            info = {"status": "active"}
+            try:
+                info = await ClientManager.inspect_account(acc.session_name)
+            except Exception as e:
+                info = {"status": "error", "msg": str(e)}
+            if hasattr(acc, "health_status"):
+                acc.health_status = info.get("status") or "active"
+            if info.get("status") == "frozen":
+                acc.is_online = True
+                failed.append(f"{acc.phone}: 已上线但冻结，不能改资料")
+            elif info.get("status") == "dead":
+                acc.is_online = False
+                failed.append(f"{acc.phone}: 死号")
+            else:
+                acc.is_online = True
+                success.append(acc.phone)
         except Exception as e:
             msg = str(e)
             failed.append(f"{acc.phone}: {msg}")

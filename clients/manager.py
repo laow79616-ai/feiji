@@ -69,10 +69,38 @@ class ClientManager:
         return os.path.join(SESSIONS_DIR, f"{session_name}.session")
 
     @classmethod
+    async def resolve_api(cls, session_name: str):
+        api_id, api_hash = API_ID, API_HASH
+        try:
+            from sqlalchemy import select
+            from models import Account, ApiCredential
+            factory = None
+            try:
+                from database import AsyncSessionLocal as factory
+            except Exception:
+                try:
+                    from database import async_session as factory
+                except Exception:
+                    factory = None
+            if factory:
+                async with factory() as db:
+                    r = await db.execute(select(Account).where(Account.session_name == session_name))
+                    acc = r.scalar_one_or_none()
+                    if acc and acc.api_id:
+                        r2 = await db.execute(select(ApiCredential).where(ApiCredential.id == acc.api_id))
+                        cred = r2.scalar_one_or_none()
+                        if cred:
+                            api_id, api_hash = cred.api_id, cred.api_hash
+        except Exception:
+            pass
+        return api_id, api_hash
+
+    @classmethod
     async def create_client(cls, session_name: str, proxy_str: str = None) -> TelegramClient:
         session_path = cls.get_session_path(session_name)
         proxy = parse_proxy(proxy_str)
-        client = TelegramClient(session_path, API_ID, API_HASH, proxy=proxy)
+        api_id, api_hash = await cls.resolve_api(session_name)
+        client = TelegramClient(session_path, api_id, api_hash, proxy=proxy)
         return client
 
     @classmethod
@@ -134,12 +162,18 @@ class ClientManager:
 
     @classmethod
     async def reconnect(cls, session_name: str, proxy_str: str = None) -> TelegramClient:
-        if session_name in clients and clients[session_name].is_connected():
-            return clients[session_name]
+        old = clients.get(session_name)
+        if old:
+            try:
+                if old.is_connected():
+                    await old.disconnect()
+            except Exception:
+                pass
+            clients.pop(session_name, None)
         client = await cls.create_client(session_name, proxy_str)
         await client.connect()
         if not await client.is_user_authorized():
-            raise ValueError("Session 无效，需要重新登录")
+            raise ValueError("Session 无效，需要重新登录（授权已失效，请重新导入或验证码登录）")
         clients[session_name] = client
         cls._register_handlers(client, session_name)
         return client
@@ -227,30 +261,94 @@ class ClientManager:
             await client.send_message(chat_id, text)
         return True
 
+
+    @classmethod
+    async def inspect_account(cls, session_name: str) -> dict:
+        client = await cls.get_client(session_name)
+        if not client or not client.is_connected():
+            return {"status": "offline", "msg": "未连接"}
+        try:
+            me = await client.get_me()
+        except Exception as e:
+            msg = str(e)
+            if "frozen" in msg.lower():
+                return {"status": "frozen", "msg": "冻结"}
+            if any(k in msg.lower() for k in ["deactivated", "revoked", "auth_key", "unauthorized"]):
+                return {"status": "dead", "msg": msg}
+            return {"status": "error", "msg": msg}
+        if getattr(me, "deleted", False):
+            return {"status": "dead", "msg": "已注销"}
+        if getattr(me, "restricted", False):
+            return {"status": "frozen", "msg": "受限/冻结"}
+        try:
+            from telethon.tl.functions.account import GetAccountTTLRequest
+            await client(GetAccountTTLRequest())
+        except Exception as e:
+            msg = str(e)
+            if "frozen" in msg.lower():
+                return {"status": "frozen", "msg": "冻结"}
+            if "flood" in msg.lower():
+                return {"status": "active", "msg": "限流但仍可用"}
+        return {"status": "active", "msg": "正常", "phone": getattr(me, "phone", None)}
+
     @classmethod
     async def get_recent_codes(cls, session_name: str) -> List[dict]:
         return code_cache.get(session_name, [])
 
+
+    @classmethod
+    async def _ensure_client(cls, session_name: str):
+        client = await cls.get_client(session_name)
+        if client and client.is_connected():
+            return client
+        proxy_str = None
+        try:
+            from database import AsyncSessionLocal
+            from models import Account, Proxy
+            from sqlalchemy import select
+            async with AsyncSessionLocal() as db:
+                r = await db.execute(
+                    select(Account, Proxy)
+                    .join(Proxy, Account.proxy_id == Proxy.id, isouter=True)
+                    .where(Account.session_name == session_name)
+                )
+                row = r.first()
+                if row:
+                    acc, proxy = row
+                    proxy_str = proxy.proxy_str if proxy else None
+        except Exception:
+            try:
+                from database import get_db
+            except Exception:
+                pass
+        await cls.reconnect(session_name, proxy_str)
+        return await cls.get_client(session_name)
+
     @classmethod
     async def update_profile(cls, session_name: str, first_name: str = None, about: str = None):
-        client = await cls.get_client(session_name)
-        if not client:
+        client = await cls._ensure_client(session_name)
+        if not client or not client.is_connected():
             raise ValueError("客户端不存在或未连接")
         from telethon.tl.functions.account import UpdateProfileRequest
         await client(UpdateProfileRequest(
-            first_name=first_name or "",
-            about=about or ""
+            first_name=first_name or None,
+            about=about if about is not None else None
         ))
         return True
 
     @classmethod
     async def upload_profile_photo(cls, session_name: str, photo_path: str):
-        client = await cls.get_client(session_name)
-        if not client:
+        client = await cls._ensure_client(session_name)
+        if not client or not client.is_connected():
             raise ValueError("客户端不存在或未连接")
+        if not photo_path or not os.path.exists(photo_path):
+            raise ValueError("图片文件不存在: " + str(photo_path))
         from telethon.tl.functions.photos import UploadProfilePhotoRequest
         file = await client.upload_file(photo_path)
-        await client(UploadProfilePhotoRequest(file=file))
+        try:
+            await client(UploadProfilePhotoRequest(file=file))
+        except TypeError:
+            await client(UploadProfilePhotoRequest(File=file))
         return True
 
     @classmethod

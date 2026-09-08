@@ -46,7 +46,9 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
   <div class="w-80 shrink-0">
     <div class="card rounded-xl p-3 sticky top-20">
       <div class="flex justify-between items-center mb-3">
-        <span class="font-semibold text-sm">线路分组</span>
+        <span class="font-semibold text-sm">线路分组</span></div>
+<input id="lineSearch" type="text" placeholder="搜索线路 / 号码 / 名称" class="w-full mt-2 mb-2 px-2 py-1 rounded text-sm bg-[#0f172a] text-white" oninput="filterLines()">
+<div style="display:none"><span></span>
         <button onclick="loadAccounts()" class="text-xs px-2 py-1 bg-gray-800 rounded">刷新</button>
       </div>
       <div id="groupNav" class="space-y-2 max-h-[70vh] overflow-y-auto"></div>
@@ -126,6 +128,10 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 <div class="card rounded-xl p-5">
 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
 <div class="text-xs text-gray-400 mb-1">水军池共 <span id="joinAccCount">0</span> 个 · 已选 <span id="joinAccSelected">0</span></div>
+<div class="flex gap-2 mb-2">
+  <button type="button" id="joinSelectAll" onclick="toggleJoinAccounts()" class="text-xs px-3 py-1 rounded bg-slate-700">一键全选</button>
+  <button type="button" onclick="clearJoinAccounts()" class="text-xs px-3 py-1 rounded bg-slate-700">取消全选</button>
+</div>
 <select id="joinAccounts" onchange="updateJoinCounts()" multiple class="h-36 px-2 py-1 rounded text-sm"></select>
 <div class="text-xs text-gray-400 mb-1">目标共 <span id="joinTargetCount">0</span> 个 · 已选 <span id="joinTargetSelected">0</span></div>
 <select id="joinTargets" onchange="updateJoinCounts()" multiple class="h-36 px-2 py-1 rounded text-sm"></select>
@@ -185,6 +191,15 @@ async function checkAllHealth(){
     }
   };
   poll();
+}
+
+
+function filterLines(){
+  const q=(document.getElementById('lineSearch')?.value||'').trim().toLowerCase();
+  document.querySelectorAll('[data-line],[data-proxy],.line-item,#lineList > *,#groupList > *').forEach(el=>{
+    const t=(el.innerText||el.textContent||'').toLowerCase();
+    el.style.display = (!q || t.includes(q)) ? '' : 'none';
+  });
 }
 
 function switchTab(name){
@@ -618,7 +633,7 @@ async function doLeave(){
   try{
     const d=await(await fetch('/targets/leave',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({session_names:accounts,target_ids:targetIds,interval:Math.min(interval,10)})
+      body:JSON.stringify({session_names:accounts.filter(s=>!window.allAccounts||(window.allAccounts.find(a=>a.session_name===s)||{}).is_online),target_ids:targetIds,interval:Math.min(interval,10)})
     })).json();
     document.getElementById('joinResult').textContent=JSON.stringify(d,null,2);
     if(statusEl && d.details){
@@ -693,6 +708,20 @@ async function importZip(){
   }catch(e){ if(box) box.textContent=String(e); }
 }
 
+
+
+function toggleJoinAccounts(){
+  const sel=document.getElementById('joinAccounts');
+  if(!sel) return;
+  for(const o of sel.options) o.selected = true;
+  if(typeof updateJoinCounts==='function') updateJoinCounts();
+}
+function clearJoinAccounts(){
+  const sel=document.getElementById('joinAccounts');
+  if(!sel) return;
+  for(const o of sel.options) o.selected = false;
+  if(typeof updateJoinCounts==='function') updateJoinCounts();
+}
 
 async function doJoin(){
   const accEl=document.getElementById('joinAccounts');

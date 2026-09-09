@@ -703,4 +703,50 @@ async def _run_check_all(job_id, session_names):
     conn.close()
     job["status"] = "finished"
 
+@router.post("/rebalance")
+async def rebalance_accounts(db: AsyncSession = Depends(get_db)):
+    """水军号均匀分配到现有代理和 API，号保留在库"""
+    from sqlalchemy import select, update
+    from models import Account, Proxy, ApiCredential
+    accs = (await db.execute(select(Account).order_by(Account.id))).scalars().all()
+    proxies = (await db.execute(select(Proxy).order_by(Proxy.id))).scalars().all()
+    apis = (await db.execute(select(ApiCredential).order_by(ApiCredential.id))).scalars().all()
+    if not accs:
+        return {"ok": False, "msg": "库里没有水军号"}
+    if not proxies:
+        return {"ok": False, "msg": "请先添加代理IP"}
+    pn, an = len(proxies), len(apis)
+    for i, acc in enumerate(accs):
+        acc.proxy_id = proxies[i % pn].id
+        if an:
+            acc.api_id = apis[i % an].id
+    await db.commit()
+    per_p = {p.name: 0 for p in proxies}
+    for i, acc in enumerate(accs):
+        per_p[proxies[i % pn].name] += 1
+    return {
+        "ok": True,
+        "accounts": len(accs),
+        "proxies": pn,
+        "apis": an,
+        "each_proxy_about": (len(accs) + pn - 1) // pn,
+        "msg": f"已分配 {len(accs)} 个号到 {pn} 条IP" + (f"、{an} 条API" if an else "（暂无API）")
+    }
+
+@router.post("/rebalance-ip")
+async def rebalance_ip(db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select
+    from models import Account, Proxy
+    accs = (await db.execute(select(Account).order_by(Account.id))).scalars().all()
+    proxies = (await db.execute(select(Proxy).order_by(Proxy.id))).scalars().all()
+    if not accs:
+        return {"ok": False, "msg": "库里没有水军号"}
+    if not proxies:
+        return {"ok": False, "msg": "请先添加代理IP"}
+    n = len(proxies)
+    for i, acc in enumerate(accs):
+        acc.proxy_id = proxies[i % n].id
+    await db.commit()
+    return {"ok": True, "accounts": len(accs), "proxies": n, "each": (len(accs)+n-1)//n,
+            "msg": f"已把 {len(accs)} 个水军号均匀分配到 {n} 条IP"}
 

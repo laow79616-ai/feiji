@@ -4,7 +4,88 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TG 水军管理系统</title>
-<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.tailwindcss.com">
+function proxySelectAll(on){
+  document.querySelectorAll('.proxy-ck').forEach(c=>c.checked=!!on);
+}
+function selectedProxyIds(){
+  return [...document.querySelectorAll('.proxy-ck:checked')].map(c=>parseInt(c.value)).filter(Boolean);
+}
+async function deleteProxy(id, name){
+  if(!confirm('删除代理【'+(name||id)+'】？有号的线路不会删')) return;
+  const r=await fetch('/pools/proxies/'+id,{method:'DELETE'});
+  let d={}; try{d=await r.json()}catch(e){return alert('失败')}
+  if(!r.ok) return alert(d.detail||JSON.stringify(d));
+  if(typeof loadProxies==='function') loadProxies();
+}
+async function deleteSelectedProxies(){
+  const ids=selectedProxyIds();
+  if(!ids.length) return alert('先勾选');
+  if(!confirm('删除选中 '+ids.length+' 条？有号的会跳过')) return;
+  const r=await fetch('/pools/proxies/delete-batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
+  const d=await r.json();
+  alert((d.msg||'')+'\n跳过: '+(d.skipped||[]).join('\n'));
+  if(typeof loadProxies==='function') loadProxies();
+}
+async function deleteAllProxies(){
+  if(!confirm('清空全部代理IP？水军号会留在库里，稍后可一键重新分配')) return;
+  const r=await fetch('/pools/proxies/clear-all',{method:'POST'});
+  let d={}; try{d=await r.json()}catch(e){return alert('失败')}
+  alert(d.msg||JSON.stringify(d));
+  if(typeof loadProxies==='function') loadProxies();
+  if(typeof loadAccounts==='function') loadAccounts();
+}
+
+
+function apiSelectAll(on){
+  document.querySelectorAll('.api-ck').forEach(c=>c.checked=!!on);
+}
+function selectedApiIds(){
+  return [...document.querySelectorAll('.api-ck:checked')].map(c=>parseInt(c.value)).filter(Boolean);
+}
+async function deleteApi(id){
+  if(!confirm('删除该 API？水军号会留在库里')) return;
+  const r=await fetch('/pools/apis/'+id,{method:'DELETE'});
+  let d={}; try{d=await r.json()}catch(e){return alert('失败')}
+  if(!r.ok) return alert(d.detail||JSON.stringify(d));
+  if(typeof loadApis==='function') loadApis();
+}
+async function deleteSelectedApis(){
+  const ids=selectedApiIds();
+  if(!ids.length) return alert('先勾选');
+  if(!confirm('删除选中 '+ids.length+' 条 API？号留在库')) return;
+  const r=await fetch('/pools/apis/delete-batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
+  const d=await r.json();
+  alert(d.msg||JSON.stringify(d));
+  if(typeof loadApis==='function') loadApis();
+}
+async function deleteAllApis(){
+  if(!confirm('清空全部 API？水军号留在库，稍后重新分配')) return;
+  const r=await fetch('/pools/apis/clear-all',{method:'POST'});
+  let d={}; try{d=await r.json()}catch(e){return alert('失败')}
+  alert(d.msg||JSON.stringify(d));
+  if(typeof loadApis==='function') loadApis();
+  if(typeof loadAccounts==='function') loadAccounts();
+}
+
+
+async function rebalanceAccounts(){
+  if(!confirm('把库里全部水军号均匀分配到当前代理（有API也一起均匀分）？')) return;
+  const r=await fetch('/accounts/rebalance',{method:'POST'});
+  let d={}; try{d=await r.json()}catch(e){return alert('请求失败')}
+  alert(d.msg||JSON.stringify(d));
+  if(typeof loadProxies==='function') loadProxies();
+  if(typeof loadApis==='function') loadApis();
+  if(typeof loadAccounts==='function') loadAccounts();
+}
+
+
+
+
+
+
+
+</script>
 <style>
 body{background:#0b1120;color:#e2e8f0}
 .card{background:#111827;border:1px solid #1f2937}
@@ -47,7 +128,7 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
     <div class="card rounded-xl p-3 sticky top-20">
       <div class="flex justify-between items-center mb-3">
         <span class="font-semibold text-sm">线路分组</span></div>
-<input id="lineSearch" type="text" placeholder="搜索线路 / 号码 / 名称" class="w-full mt-2 mb-2 px-2 py-1 rounded text-sm bg-[#0f172a] text-white" oninput="filterLines()">
+<input id="accSearch" onkeydown="if(event.key==='Enter')searchAccount()"  id="lineSearch" type="text" placeholder="搜索线路 / 号码 / 名称" class="w-full mt-2 mb-2 px-2 py-1 rounded text-sm bg-[#0f172a] text-white" oninput="filterLines()" id="accSearch" onkeydown="if(event.key==='Enter')searchAccount()">
 <div style="display:none"><span></span>
         <button onclick="loadAccounts()" class="text-xs px-2 py-1 bg-gray-800 rounded">刷新</button>
       </div>
@@ -100,7 +181,14 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 <button onclick="batchAddApis()" class="btn-primary px-5 py-2 rounded">批量添加</button>
 <p id="apiMsg" class="mt-2 text-sm text-green-400"></p>
 </div>
-<div class="card rounded-xl p-5"><div id="apiPoolSummary" class="text-xs text-gray-400 mb-2"></div><div id="apiList" class="space-y-2 text-sm"></div></div>
+<div class="card rounded-xl p-5"><div id="apiPoolSummary" class="text-xs text-gray-400 mb-2"></div><div id="apiTools" class="flex flex-wrap gap-2 mb-3 items-center">
+<button type="button" onclick="apiSelectAll(true)" class="text-xs px-3 py-1 rounded bg-slate-700">全选</button>
+<button type="button" onclick="apiSelectAll(false)" class="text-xs px-3 py-1 rounded bg-slate-700">取消全选</button>
+<button type="button" onclick="deleteSelectedApis()" class="text-xs px-3 py-1 rounded bg-red-800">删除选中</button>
+<button type="button" onclick="deleteAllApis()" class="text-xs px-3 py-1 rounded bg-red-900">全部删除</button>
+
+</div>
+<div id="apiList" class="space-y-2 text-sm"></div></div>
 </div>
 
 <div id="panel-proxies" class="panel hidden">
@@ -109,7 +197,14 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 <button onclick="batchAddProxies()" class="btn-primary px-5 py-2 rounded">批量添加</button>
 <p id="proxyMsg" class="mt-2 text-sm text-green-400"></p>
 </div>
-<div class="card rounded-xl p-5"><div id="proxyPoolSummary" class="text-xs text-gray-400 mb-2"></div><div id="proxyList" class="space-y-2 text-sm"></div></div>
+<div class="card rounded-xl p-5"><div id="proxyPoolSummary" class="text-xs text-gray-400 mb-2"></div><div id="proxyTools" class="flex flex-wrap gap-2 mb-3 items-center">
+<button type="button" onclick="proxySelectAll(true)" class="text-xs px-3 py-1 rounded bg-slate-700">全选</button>
+<button type="button" onclick="proxySelectAll(false)" class="text-xs px-3 py-1 rounded bg-slate-700">取消全选</button>
+<button type="button" onclick="deleteSelectedProxies()" class="text-xs px-3 py-1 rounded bg-red-800">删除选中</button>
+<button type="button" onclick="deleteAllProxies()" class="text-xs px-3 py-1 rounded bg-red-900">全部删除</button>
+<button type="button" onclick="window.rebalanceIp()" class="text-xs px-3 py-1 rounded bg-emerald-700">一键均匀分配</button>
+</div>
+<div id="proxyList" class="space-y-2 text-sm"></div></div>
 </div>
 
 <div id="panel-targets" class="panel hidden">
@@ -200,6 +295,47 @@ function filterLines(){
     const t=(el.innerText||el.textContent||'').toLowerCase();
     el.style.display = (!q || t.includes(q)) ? '' : 'none';
   });
+}
+
+
+function filterAccounts(){
+  const q=(document.getElementById('accSearch')||{}).value||'';
+  const s=q.trim().toLowerCase().replace(/\s+/g,'');
+  document.querySelectorAll('[data-group],[data-phone],.group-item,.acc-row').forEach(el=>{
+    const t=((el.dataset.phone||el.dataset.group||el.textContent)||'').toLowerCase().replace(/\s+/g,'');
+    el.style.display = (!s || t.indexOf(s)>=0) ? '' : 'none';
+  });
+}
+
+
+function searchAccount(){
+  const el=document.getElementById('accSearch');
+  const q=((el&&el.value)||'').trim().toLowerCase().replace(/[\s+]/g,'');
+  if(!q){ if(currentGroup) selectGroup(currentGroup); return; }
+  if(typeof allGroups!=='object' || !allGroups) return;
+  let foundGroup=null, found=null;
+  for(const [g, arr] of Object.entries(allGroups)){
+    for(const a of (arr||[])){
+      const phone=String(a.phone||'').toLowerCase().replace(/[\s+]/g,'');
+      const name=String(a.name||'').toLowerCase();
+      const sess=String(a.session_name||'').toLowerCase();
+      if(phone.indexOf(q)>=0 || name.indexOf(q)>=0 || sess.indexOf(q)>=0){
+        foundGroup=g; found=a; break;
+      }
+    }
+    if(found) break;
+  }
+  if(!foundGroup){ alert('未找到'); return; }
+  currentGroup=foundGroup;
+  if(typeof selectGroup==='function') selectGroup(foundGroup);
+  setTimeout(()=>{
+    document.querySelectorAll('#panel-accounts [data-phone], #panel-accounts div').forEach(div=>{
+      const t=(div.innerText||'');
+      if(!/\+\d{6,}/.test(t)) return;
+      const hit=t.toLowerCase().replace(/[\s+]/g,'').indexOf(q)>=0;
+      div.style.outline = hit ? '2px solid #22c55e' : '';
+    });
+  }, 50);
 }
 
 function switchTab(name){
@@ -546,7 +682,11 @@ async function loadApis(){
   const list=await(await fetch('/pools/apis')).json();
   var _as=document.getElementById('apiPoolSummary');
   if(_as){var u=list.reduce((s,a)=>s+(a.used||0),0);_as.textContent='API 共 '+list.length+' 条 · 号 '+u+' 个';}
-  document.getElementById('apiList').innerHTML=list.map(a=>`<div class="bg-[#0f172a] rounded px-3 py-2">${a.name} · 已用${a.used||0} · 剩${Math.max(0,a.remain!=null?a.remain:15-(a.used||0))}${(a.used||0)>15?' · 已超额':''}</div>`).join('')||'<p class="text-gray-500">暂无</p>';
+  document.getElementById('apiList').innerHTML=list.map(a=>`<div class="bg-[#0f172a] rounded px-3 py-2 flex items-center gap-2">
+<input type="checkbox" class="api-ck" value="${a.id}">
+<span class="flex-1">${a.name} · 已用${a.used||0} · 剩${a.remain!=null?a.remain:((a.cap||10)-(a.used||0))}</span>
+<button type="button" onclick="deleteApi(${a.id})" class="text-xs px-2 py-0.5 rounded bg-red-800">删除</button>
+</div>`).join('')||'<p class="text-gray-500">暂无</p>';
   const sel=document.getElementById('selectApi');
   if(sel)sel.innerHTML=list.filter(a=>a.remain>0).map(a=>`<option value="${a.id}">${a.name}（剩${a.remain}）</option>`).join('');
 }
@@ -561,7 +701,11 @@ async function loadProxies(){
   const list=await(await fetch('/pools/proxies')).json();
   var _ps=document.getElementById('proxyPoolSummary');
   if(_ps){var u=list.reduce((s,p)=>s+(p.used||0),0);_ps.textContent='代理 共 '+list.length+' 条 · 号 '+u+' 个';}
-  document.getElementById('proxyList').innerHTML=list.map(p=>`<div class="bg-[#0f172a] rounded px-3 py-2"><span class="${p.is_ok===false||p.is_ok===0?'text-red-400':'text-green-400'}">${p.name}</span> · 共15 · 已用${p.used||0} · 剩${Math.max(0,p.remain!=null?p.remain:15-(p.used||0))}</div>`).join('')||'<p class="text-gray-500">暂无</p>';
+  document.getElementById('proxyList').innerHTML=list.map(p=>`<div class="bg-[#0f172a] rounded px-3 py-2 flex items-center gap-2">
+<input type="checkbox" class="proxy-ck" value="${p.id}">
+<span class="flex-1">${p.name} · 共${p.cap||p.capacity||15} · 已用${p.used||0} · 剩${(p.remain!=null?p.remain:((p.cap||15)-(p.used||0)))}</span>
+<button type="button" onclick="deleteProxy(${p.id},'${(p.name||'').replace(/'/g,'')}')" class="text-xs px-2 py-0.5 rounded bg-red-800">删除</button>
+</div>`).join('')||'<p class="text-gray-500">暂无</p>';
   const sel=document.getElementById('selectProxy');
   if(sel)sel.innerHTML=list.filter(p=>p.remain>0).map(p=>`<option value="${p.id}">${p.name}（剩${p.remain}）</option>`).join('');
 }
@@ -787,6 +931,56 @@ async function stopJoinJob(){
   alert('已请求停止');
 }
 loadAccounts();
+
+function proxySelectAll(on){
+  document.querySelectorAll('.proxy-ck').forEach(c=>c.checked=!!on);
+}
+function selectedProxyIds(){
+  return [...document.querySelectorAll('.proxy-ck:checked')].map(c=>parseInt(c.value)).filter(Boolean);
+}
+async function deleteProxy(id, name){
+  if(!confirm('删除代理【'+(name||id)+'】？有号的线路不会删')) return;
+  const r=await fetch('/pools/proxies/'+id,{method:'DELETE'});
+  let d={}; try{d=await r.json()}catch(e){return alert('失败')}
+  if(!r.ok) return alert(d.detail||JSON.stringify(d));
+  if(typeof loadProxies==='function') loadProxies();
+}
+async function deleteSelectedProxies(){
+  const ids=selectedProxyIds();
+  if(!ids.length) return alert('先勾选');
+  if(!confirm('删除选中 '+ids.length+' 条？有号的会跳过')) return;
+  const r=await fetch('/pools/proxies/delete-batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
+  const d=await r.json();
+  alert((d.msg||'')+'\n跳过: '+(d.skipped||[]).join('\n'));
+  if(typeof loadProxies==='function') loadProxies();
+}
+async function deleteAllProxies(){
+  const ids=[...document.querySelectorAll('.proxy-ck')].map(c=>parseInt(c.value)).filter(Boolean);
+  if(!ids.length) return alert('没有代理');
+  if(!confirm('全部删除 '+ids.length+' 条？有号的线路会跳过')) return;
+  const r=await fetch('/pools/proxies/delete-batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
+  const d=await r.json();
+  alert((d.msg||'')+'\n跳过: '+(d.skipped||[]).join('\n'));
+  if(typeof loadProxies==='function') loadProxies();
+}
+
 </script>
+
+<script>
+window.rebalanceIp = async function(){
+  try{
+    if(!confirm('把库里全部水军号均匀分配到当前这些IP？')) return;
+    const r = await fetch('/accounts/rebalance-ip', {method:'POST', credentials:'same-origin'});
+    const t = await r.text();
+    let d; try{ d=JSON.parse(t) }catch(e){ alert('返回不是JSON HTTP '+r.status+'\n'+t.slice(0,200)); return; }
+    alert(d.msg || JSON.stringify(d));
+    if(typeof loadProxies==='function') loadProxies();
+    if(typeof loadAccounts==='function') loadAccounts();
+  }catch(e){
+    alert('分配失败: '+e);
+  }
+};
+</script>
+
 </body>
 </html>

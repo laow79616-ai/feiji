@@ -206,3 +206,112 @@ async def batch_add_proxies(req: ProxyBatchCreate, db: AsyncSession = Depends(ge
         "failed_count": len(failed),
         "failed": failed
     }
+
+class ProxyIds(BaseModel):
+    ids: list[int]
+
+@router.delete("/proxies/{proxy_id}")
+async def delete_proxy(proxy_id: int, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select, func
+    from models import Proxy, Account
+    r = await db.execute(select(Proxy).where(Proxy.id == proxy_id))
+    p = r.scalar_one_or_none()
+    if not p:
+        raise HTTPException(404, "代理不存在")
+    cnt = (await db.execute(select(func.count()).select_from(Account).where(Account.proxy_id == proxy_id))).scalar() or 0
+    if cnt:
+        raise HTTPException(400, f"该线路还有 {cnt} 个号，先删号或换线再删代理")
+    await db.delete(p)
+    await db.commit()
+    return {"ok": True, "id": proxy_id}
+
+@router.post("/proxies/delete-batch")
+async def delete_proxies_batch(req: ProxyIds, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select, func
+    from models import Proxy, Account
+    ok, skip = [], []
+    for pid in req.ids or []:
+        r = await db.execute(select(Proxy).where(Proxy.id == pid))
+        p = r.scalar_one_or_none()
+        if not p:
+            skip.append(f"{pid}:不存在")
+            continue
+        cnt = (await db.execute(select(func.count()).select_from(Account).where(Account.proxy_id == pid))).scalar() or 0
+        if cnt:
+            skip.append(f"{p.name}:还有{cnt}个号")
+            continue
+        await db.delete(p)
+        ok.append(p.name)
+    await db.commit()
+    return {"deleted": ok, "skipped": skip, "msg": f"已删{len(ok)} 跳过{len(skip)}"}
+
+@router.post("/proxies/clear-all")
+async def clear_all_proxies(db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select, update
+    from models import Proxy, Account
+    try:
+        await db.execute(update(Account).values(proxy_id=None))
+    except Exception:
+        await db.execute(update(Account).values(proxy_id=0))
+    rows = (await db.execute(select(Proxy))).scalars().all()
+    n = 0
+    for p in rows:
+        await db.delete(p)
+        n += 1
+    await db.commit()
+    return {"ok": True, "deleted": n, "msg": f"已清空 {n} 条IP，水军号保留"}
+
+class ApiIds(BaseModel):
+    ids: list[int] = []
+
+@router.delete("/apis/{api_id}")
+async def delete_api(api_id: int, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select, update
+    from models import ApiCredential, Account
+    r = await db.execute(select(ApiCredential).where(ApiCredential.id == api_id))
+    a = r.scalar_one_or_none()
+    if not a:
+        raise HTTPException(404, "API不存在")
+    try:
+        await db.execute(update(Account).where(Account.api_id == api_id).values(api_id=None))
+    except Exception:
+        await db.execute(update(Account).where(Account.api_id == api_id).values(api_id=0))
+    await db.delete(a)
+    await db.commit()
+    return {"ok": True, "id": api_id, "msg": "已删API，水军号保留"}
+
+@router.post("/apis/delete-batch")
+async def delete_apis_batch(req: ApiIds, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select, update
+    from models import ApiCredential, Account
+    ids = req.ids or []
+    ok = []
+    for aid in ids:
+        r = await db.execute(select(ApiCredential).where(ApiCredential.id == aid))
+        a = r.scalar_one_or_none()
+        if not a:
+            continue
+        try:
+            await db.execute(update(Account).where(Account.api_id == aid).values(api_id=None))
+        except Exception:
+            await db.execute(update(Account).where(Account.api_id == aid).values(api_id=0))
+        await db.delete(a)
+        ok.append(a.name if hasattr(a, "name") else str(aid))
+    await db.commit()
+    return {"deleted": ok, "count": len(ok), "msg": f"已删 {len(ok)} 条API，水军号仍在库"}
+
+@router.post("/apis/clear-all")
+async def clear_all_apis(db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select, update
+    from models import ApiCredential, Account
+    try:
+        await db.execute(update(Account).values(api_id=None))
+    except Exception:
+        await db.execute(update(Account).values(api_id=0))
+    rows = (await db.execute(select(ApiCredential))).scalars().all()
+    n = 0
+    for a in rows:
+        await db.delete(a)
+        n += 1
+    await db.commit()
+    return {"ok": True, "deleted": n, "msg": f"已清空 {n} 条API，水军号保留"}

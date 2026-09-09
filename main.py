@@ -49,7 +49,7 @@ from auth_util import ADMIN_USER, ADMIN_PASS, _make_token, check_token, LOGIN_HT
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
     # 放行登录与静态探测
-    if path in ("/login", "/logout") or path.startswith("/docs") or path.startswith("/openapi"):
+    if path in ("/login", "/logout"):
         return await call_next(request)
     token = request.cookies.get("tg_token")
     if not token or not check_token(token):

@@ -115,7 +115,7 @@ async def verify_code(req: VerifyCodeRequest, db: AsyncSession = Depends(get_db)
 
 @router.get("/")
 async def list_accounts(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Account))
+    result = await db.execute(select(Account).order_by(Account.proxy_id, Account.id))
     accounts = result.scalars().all()
     
     data = []

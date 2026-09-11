@@ -43,6 +43,7 @@ async def list_apis(db: AsyncSession = Depends(get_db)):
             "id": api.id,
             "name": api.name,
             "api_id": api.api_id,
+            "group_no": getattr(p, "group_no", None), "note": getattr(p, "note", None) or "",
             "used": count,
             "remain": MAX_PER_POOL - count
         })
@@ -119,7 +120,7 @@ class ProxyCreate(BaseModel):
 
 @router.post("/proxies")
 async def add_proxy(req: ProxyCreate, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Proxy).where(Proxy.proxy_str == req.proxy_str))
+    result = await db.execute(select(Proxy).order_by(Proxy.id).where(Proxy.proxy_str == req.proxy_str))
     if result.scalar_one_or_none():
         raise HTTPException(400, "该代理已存在")
     
@@ -145,6 +146,7 @@ async def list_proxies(db: AsyncSession = Depends(get_db)):
             "id": p.id,
             "name": p.name,
             "proxy_str": p.proxy_str,
+            "group_no": getattr(p, "group_no", None),
             "used": count,
             "is_ok": bool(getattr(p,"is_ok",1)),
             "remain": MAX_PER_POOL - count
@@ -315,3 +317,39 @@ async def clear_all_apis(db: AsyncSession = Depends(get_db)):
         n += 1
     await db.commit()
     return {"ok": True, "deleted": n, "msg": f"已清空 {n} 条API，水军号保留"}
+
+
+class _ProxyNoteReq(BaseModel):
+    note: str = ""
+
+@router.post("/proxies/{proxy_id}/note")
+async def set_proxy_note(proxy_id: int, req: _ProxyNoteReq, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import text
+    await db.execute(text("UPDATE proxies SET note=:n WHERE id=:i"), {"n": (req.note or "").strip(), "i": proxy_id})
+    await db.commit()
+    return {"ok": True, "id": proxy_id, "note": (req.note or "").strip()}
+
+
+
+class _NoteByName(BaseModel):
+    name: str
+    note: str = ""
+
+@router.post("/proxies/note-by-name")
+async def note_by_name(req: _NoteByName, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import text
+    await db.execute(
+        text("UPDATE proxies SET note=:n WHERE name=:name"),
+        {"n": (req.note or "").strip(), "name": req.name}
+    )
+    await db.commit()
+    return {"ok": True, "name": req.name, "note": (req.note or "").strip()}
+
+
+@router.get("/proxy-notes")
+async def get_proxy_notes():
+    import sqlite3
+    con = sqlite3.connect("/opt/telegram_manager/telegram_manager.db")
+    rows = con.execute("SELECT name, IFNULL(note,'') FROM proxies").fetchall()
+    con.close()
+    return {n: (note or "") for n, note in rows}

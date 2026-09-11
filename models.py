@@ -19,9 +19,11 @@ class Proxy(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100))                      # 备注名
+    group_no = Column(Integer, nullable=True)
     proxy_str = Column(String(200), unique=True)    # ip:port:user:pass
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    note = Column(Text, nullable=True)
 
 class Account(Base):
     __tablename__ = "accounts"

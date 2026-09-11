@@ -178,119 +178,55 @@ async def reconnect_account(session_name: str, db: AsyncSession = Depends(get_db
 
 
 
-
 @router.post("/line/online")
 async def line_online(proxy_name: str, db: AsyncSession = Depends(get_db)):
-    """整组上线：删除冻结号；先下线本线路已在线号；最多上线10个；再次点击轮换下一批。"""
-    from clients.manager import ClientManager, clients
-    import os
-    from config import SESSIONS_DIR
+    """一键上线某条代理下的所有账号"""
+    from models import Account, Proxy
+    from sqlalchemy import select
+    from clients.manager import ClientManager
 
     proxy_result = await db.execute(select(Proxy).where(Proxy.name == proxy_name))
     proxy = proxy_result.scalar_one_or_none()
     if not proxy:
-        return {"success": [], "failed": [f"代理不存在: {proxy_name}"], "deleted": []}
+        return {"success": [], "failed": [f"代理不存在: {proxy_name}"]}
 
-    result = await db.execute(select(Account).where(Account.proxy_id == proxy.id).order_by(Account.id))
-    accs = list(result.scalars().all())
-
-    def _is_frozen_acc(a):
-        st = (getattr(a, "health_status", None) or getattr(a, "status", None) or "")
-        st = str(st).lower()
-        if getattr(a, "is_frozen", False):
-            return True
-        return any(k in st for k in ("冻结", "frozen", "freeze"))
-
-    async def _delete_acc(a):
-        sn = a.session_name
-        try:
-            if sn in clients:
-                try:
-                    await clients[sn].disconnect()
-                except Exception:
-                    pass
-                clients.pop(sn, None)
-        except Exception:
-            pass
-        try:
-            path = os.path.join(SESSIONS_DIR, f"{sn}.session")
-            if os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
-        await db.delete(a)
-
-    deleted = []
-    alive = []
-    for a in accs:
-        if _is_frozen_acc(a):
-            phone = a.phone
-            await _delete_acc(a)
-            deleted.append(phone)
-        else:
-            alive.append(a)
-    await db.flush()
-
-    prev_online = [a for a in alive if a.is_online]
-    last_id = max((a.id for a in prev_online), default=0)
-
-    offline = []
-    for a in prev_online:
-        sn = a.session_name
-        try:
-            if sn in clients:
-                try:
-                    await clients[sn].disconnect()
-                except Exception:
-                    pass
-                clients.pop(sn, None)
-        except Exception:
-            pass
-        a.is_online = False
-        offline.append(a.phone)
-
-    after = [a for a in alive if a.id > last_id]
-    before = [a for a in alive if a.id <= last_id]
-    batch = (after + before)[:10]
+    result = await db.execute(select(Account).where(Account.proxy_id == proxy.id))
+    accounts = result.scalars().all()
 
     success, failed = [], []
-    for acc in batch:
+    for acc in accounts:
+        if (getattr(acc, "health_status", None) or "") == "dead":
+            failed.append(f"{acc.phone}: 已死/冻结，跳过上线")
+            acc.is_online = False
+            continue
         try:
             await ClientManager.reconnect(acc.session_name, proxy.proxy_str)
-            # 上线后再探一次冻结
-            frozen_now = False
+            info = {"status": "active"}
             try:
-                client = await ClientManager.get_client(acc.session_name)
-                if client:
-                    me = await client.get_me()
-                    # 部分冻号 get_me 仍成功，看限制标记
-                    if getattr(me, "restricted", False) and "frozen" in str(getattr(me, "restriction_reason", "")).lower():
-                        frozen_now = True
+                info = await ClientManager.inspect_account(acc.session_name)
             except Exception as e:
-                msg = str(e).lower()
-                if "frozen" in msg or "account_frozen" in msg:
-                    frozen_now = True
-                else:
-                    raise
-            if frozen_now:
-                phone = acc.phone
-                await _delete_acc(acc)
-                deleted.append(phone)
-                continue
-            acc.is_online = True
-            success.append(acc.phone)
+                info = {"status": "error", "msg": str(e)}
+            if hasattr(acc, "health_status"):
+                acc.health_status = info.get("status") or "active"
+            if info.get("status") == "frozen":
+                acc.is_online = True
+                failed.append(f"{acc.phone}: 已上线但冻结，不能改资料")
+            elif info.get("status") == "dead":
+                acc.is_online = False
+                failed.append(f"{acc.phone}: 死号")
+            else:
+                acc.is_online = True
+                success.append(acc.phone)
         except Exception as e:
+            msg = str(e)
+            failed.append(f"{acc.phone}: {msg}")
             acc.is_online = False
-            failed.append(f"{acc.phone}: {e}")
+            low = msg.lower()
+            if any(k in low for k in ["frozen","freeze","duplicated","revoked","deactivated","session 无效","unauthorized","auth_key"]):
+                acc.health_status = "dead"
 
     await db.commit()
-    return {
-        "success": success,
-        "failed": failed,
-        "deleted": deleted,
-        "offline": offline,
-        "msg": f"删除冻结{len(deleted)}个，下线{len(offline)}个，上线{len(success)}个（最多10）"
-    }
+    return {"success": success, "failed": failed}
 
 
 @router.post("/line/offline")

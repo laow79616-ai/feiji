@@ -523,12 +523,22 @@ async function sendMsg(session){
 }
 function closeChatBox(session){document.getElementById('chatbox-'+session).classList.add('hidden');}
 
-async function lineOnline(name){
-  if(!confirm('上线整组?'))return;
-  const res=await fetch('/accounts/line/online?proxy_name='+encodeURIComponent(name),{method:'POST'});
-  const d=await res.json();
-  alert('成功'+(d.success||[]).length+' 失败'+(d.failed||[]).length);
-  loadAccounts();
+async function lineOnline(proxyName){
+  if (!confirm('确定上线【' + proxyName + '】？')) return;
+  const res = await fetch('/accounts/line/online?proxy_name=' + encodeURIComponent(proxyName), {method:'POST'});
+  const d = await res.json();
+  if(!d.job_id){ alert(d.msg||JSON.stringify(d)); loadAccounts(); return; }
+  alert(d.msg||'已开始后台上线');
+  const poll=async()=>{
+    const s=await (await fetch('/accounts/line/online/status/'+d.job_id)).json();
+    if(s.status==='running'){ setTimeout(poll, 2000); return; }
+    alert((s.msg||'')+'
+失败:
+'+((s.failed||[]).slice(0,8).join('
+')));
+    loadAccounts();
+  };
+  poll();
 }
 async function lineOffline(name){
   if(!confirm('下线整组?'))return;

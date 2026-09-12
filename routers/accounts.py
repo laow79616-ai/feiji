@@ -7,6 +7,8 @@ from typing import List, Optional
 import uuid
 
 from database import get_db
+LINE_ONLINE_JOBS = {}
+
 from models import Account, ApiCredential, Proxy
 from clients.manager import ClientManager
 
@@ -179,118 +181,95 @@ async def reconnect_account(session_name: str, db: AsyncSession = Depends(get_db
 
 
 
+
+
+
 @router.post("/line/online")
 async def line_online(proxy_name: str, db: AsyncSession = Depends(get_db)):
-    """整组上线：删除冻结号；先下线本线路已在线号；最多上线10个；再次点击轮换下一批。"""
-    from clients.manager import ClientManager, clients
-    import os
-    from config import SESSIONS_DIR
+    """本条 IP 全部上线（后台），冻结号先连。不限 10 个。"""
+    import uuid, asyncio
+    from clients.manager import ClientManager
 
     proxy_result = await db.execute(select(Proxy).where(Proxy.name == proxy_name))
     proxy = proxy_result.scalar_one_or_none()
     if not proxy:
-        return {"success": [], "failed": [f"代理不存在: {proxy_name}"], "deleted": []}
+        return {"success": [], "failed": [f"代理不存在: {proxy_name}"]}
 
     result = await db.execute(select(Account).where(Account.proxy_id == proxy.id).order_by(Account.id))
     accs = list(result.scalars().all())
 
-    def _is_frozen_acc(a):
-        st = (getattr(a, "health_status", None) or getattr(a, "status", None) or "")
-        st = str(st).lower()
+    def _frozen(a):
+        st = str(getattr(a, "health_status", None) or getattr(a, "status", None) or "").lower()
         if getattr(a, "is_frozen", False):
             return True
         return any(k in st for k in ("冻结", "frozen", "freeze"))
 
-    async def _delete_acc(a):
-        sn = a.session_name
-        try:
-            if sn in clients:
-                try:
-                    await clients[sn].disconnect()
-                except Exception:
-                    pass
-                clients.pop(sn, None)
-        except Exception:
-            pass
-        try:
-            path = os.path.join(SESSIONS_DIR, f"{sn}.session")
-            if os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
-        await db.delete(a)
-
-    deleted = []
-    alive = []
+    items = []
+    frozen_n = 0
     for a in accs:
-        if _is_frozen_acc(a):
-            phone = a.phone
-            await _delete_acc(a)
-            deleted.append(phone)
+        fz = _frozen(a)
+        if fz:
+            frozen_n += 1
+        items.append({"session_name": a.session_name, "phone": a.phone, "proxy": proxy.proxy_str, "id": a.id, "frozen": fz})
+    items.sort(key=lambda x: (not x["frozen"], x["id"]))
+
+    job_id = uuid.uuid4().hex[:12]
+    LINE_ONLINE_JOBS[job_id] = {"status":"running","total":len(items),"done":0,"success":[],"failed":[],"msg":"后台上线中"}
+    asyncio.create_task(_run_line_online(job_id, items))
+    return {"job_id": job_id, "total": len(items), "msg": f"后台上线全部 {len(items)} 个，冻结先上 {frozen_n}"}
+
+async def _run_line_online(job_id, items):
+    from clients.manager import ClientManager
+    try:
+        from database import AsyncSessionLocal
+        session_factory = AsyncSessionLocal
+    except Exception:
+        from database import get_db
+        session_factory = None
+    job = LINE_ONLINE_JOBS[job_id]
+    try:
+        if session_factory:
+            dbcm = session_factory()
         else:
-            alive.append(a)
-    await db.flush()
-
-    prev_online = [a for a in alive if a.is_online]
-    last_id = max((a.id for a in prev_online), default=0)
-
-    offline = []
-    for a in prev_online:
-        sn = a.session_name
-        try:
-            if sn in clients:
+            dbcm = None
+        if dbcm is not None:
+            async with dbcm as db:
+                await _do_online(db, job, items)
+        else:
+            # 兜底：不用库，只连客户端
+            for it in items:
                 try:
-                    await clients[sn].disconnect()
-                except Exception:
-                    pass
-                clients.pop(sn, None)
-        except Exception:
-            pass
-        a.is_online = False
-        offline.append(a.phone)
+                    await ClientManager.reconnect(it["session_name"], it["proxy"])
+                    job["success"].append(it["phone"])
+                except Exception as e:
+                    job["failed"].append(f"{it['phone']}: {e}")
+                job["done"] += 1
+        job["status"] = "done"
+        job["msg"] = f"完成 成功{len(job['success'])} 失败{len(job['failed'])} / 共{job['total']}"
+    except Exception as e:
+        job["status"] = "error"
+        job["msg"] = str(e)
 
-    after = [a for a in alive if a.id > last_id]
-    before = [a for a in alive if a.id <= last_id]
-    batch = (after + before)[:10]
-
-    success, failed = [], []
-    for acc in batch:
+async def _do_online(db, job, items):
+    from clients.manager import ClientManager
+    for it in items:
         try:
-            await ClientManager.reconnect(acc.session_name, proxy.proxy_str)
-            # 上线后再探一次冻结
-            frozen_now = False
-            try:
-                client = await ClientManager.get_client(acc.session_name)
-                if client:
-                    me = await client.get_me()
-                    # 部分冻号 get_me 仍成功，看限制标记
-                    if getattr(me, "restricted", False) and "frozen" in str(getattr(me, "restriction_reason", "")).lower():
-                        frozen_now = True
-            except Exception as e:
-                msg = str(e).lower()
-                if "frozen" in msg or "account_frozen" in msg:
-                    frozen_now = True
-                else:
-                    raise
-            if frozen_now:
-                phone = acc.phone
-                await _delete_acc(acc)
-                deleted.append(phone)
-                continue
-            acc.is_online = True
-            success.append(acc.phone)
+            await ClientManager.reconnect(it["session_name"], it["proxy"])
+            acc = (await db.execute(select(Account).where(Account.id == it["id"]))).scalar_one_or_none()
+            if acc:
+                acc.is_online = True
+            job["success"].append(it["phone"])
         except Exception as e:
-            acc.is_online = False
-            failed.append(f"{acc.phone}: {e}")
-
+            acc = (await db.execute(select(Account).where(Account.id == it["id"]))).scalar_one_or_none()
+            if acc:
+                acc.is_online = False
+            job["failed"].append(f"{it['phone']}: {e}")
+        job["done"] += 1
     await db.commit()
-    return {
-        "success": success,
-        "failed": failed,
-        "deleted": deleted,
-        "offline": offline,
-        "msg": f"删除冻结{len(deleted)}个，下线{len(offline)}个，上线{len(success)}个（最多10）"
-    }
+
+@router.get("/line/online/status/{job_id}")
+async def line_online_status(job_id: str):
+    return LINE_ONLINE_JOBS.get(job_id, {"status": "missing"})
 
 
 @router.post("/line/offline")

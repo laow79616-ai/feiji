@@ -28,26 +28,30 @@ async def add_api(req: ApiCreate, db: AsyncSession = Depends(get_db)):
     return {"id": api.id, "name": api.name, "api_id": api.api_id}
 
 
+
 @router.get("/apis")
 async def list_apis(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(ApiCredential))
-    apis = result.scalars().all()
-    
-    data = []
-    for api in apis:
-        count_result = await db.execute(
-            select(func.count()).select_from(Account).where(Account.api_id == api.id)
-        )
-        count = count_result.scalar()
-        data.append({
-            "id": api.id,
-            "name": api.name,
-            "api_id": api.api_id,
-            "group_no": getattr(p, "group_no", None), "note": getattr(p, "note", None) or "",
-            "used": count,
-            "remain": MAX_PER_POOL - count
+    from sqlalchemy import func, select
+    from models import ApiCredential, Account
+    apis = (await db.execute(select(ApiCredential).order_by(ApiCredential.id))).scalars().all()
+    used_map = {}
+    try:
+        rows = (await db.execute(
+            select(Account.api_id, func.count(Account.id)).group_by(Account.api_id)
+        )).all()
+        used_map = {aid: cnt for aid, cnt in rows if aid is not None}
+    except Exception:
+        used_map = {}
+    out = []
+    for a in apis:
+        out.append({
+            "id": a.id,
+            "name": a.name or f"API-{a.api_id}",
+            "api_id": a.api_id,
+            "api_hash": (a.api_hash[:8] + "...") if getattr(a, "api_hash", None) else "",
+            "used": int(used_map.get(a.id, 0)),
         })
-    return data
+    return out
 
 
 @router.delete("/apis/{api_id}")

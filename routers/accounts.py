@@ -184,10 +184,11 @@ async def reconnect_account(session_name: str, db: AsyncSession = Depends(get_db
 
 
 
+
 @router.post("/line/online")
 async def line_online(proxy_name: str, db: AsyncSession = Depends(get_db)):
-    """本条 IP 全部上线（后台），冻结号先连。不限 10 个。"""
-    import uuid, asyncio
+    """本条 IP 全部上线；冻结号先连。"""
+    import asyncio
     from clients.manager import ClientManager
 
     proxy_result = await db.execute(select(Proxy).where(Proxy.name == proxy_name))
@@ -204,72 +205,30 @@ async def line_online(proxy_name: str, db: AsyncSession = Depends(get_db)):
             return True
         return any(k in st for k in ("冻结", "frozen", "freeze"))
 
-    items = []
-    frozen_n = 0
-    for a in accs:
-        fz = _frozen(a)
-        if fz:
-            frozen_n += 1
-        items.append({"session_name": a.session_name, "phone": a.phone, "proxy": proxy.proxy_str, "id": a.id, "frozen": fz})
-    items.sort(key=lambda x: (not x["frozen"], x["id"]))
+    accs.sort(key=lambda a: (not _frozen(a), a.id or 0))
+    sem = asyncio.Semaphore(5)
 
-    job_id = uuid.uuid4().hex[:12]
-    LINE_ONLINE_JOBS[job_id] = {"status":"running","total":len(items),"done":0,"success":[],"failed":[],"msg":"后台上线中"}
-    asyncio.create_task(_run_line_online(job_id, items))
-    return {"job_id": job_id, "total": len(items), "msg": f"后台上线全部 {len(items)} 个，冻结先上 {frozen_n}"}
-
-async def _run_line_online(job_id, items):
-    from clients.manager import ClientManager
-    try:
-        from database import AsyncSessionLocal
-        session_factory = AsyncSessionLocal
-    except Exception:
-        from database import get_db
-        session_factory = None
-    job = LINE_ONLINE_JOBS[job_id]
-    try:
-        if session_factory:
-            dbcm = session_factory()
-        else:
-            dbcm = None
-        if dbcm is not None:
-            async with dbcm as db:
-                await _do_online(db, job, items)
-        else:
-            # 兜底：不用库，只连客户端
-            for it in items:
-                try:
-                    await ClientManager.reconnect(it["session_name"], it["proxy"])
-                    job["success"].append(it["phone"])
-                except Exception as e:
-                    job["failed"].append(f"{it['phone']}: {e}")
-                job["done"] += 1
-        job["status"] = "done"
-        job["msg"] = f"完成 成功{len(job['success'])} 失败{len(job['failed'])} / 共{job['total']}"
-    except Exception as e:
-        job["status"] = "error"
-        job["msg"] = str(e)
-
-async def _do_online(db, job, items):
-    from clients.manager import ClientManager
-    for it in items:
-        try:
-            await ClientManager.reconnect(it["session_name"], it["proxy"])
-            acc = (await db.execute(select(Account).where(Account.id == it["id"]))).scalar_one_or_none()
-            if acc:
+    async def one(acc):
+        async with sem:
+            try:
+                await ClientManager.reconnect(acc.session_name, proxy.proxy_str)
                 acc.is_online = True
-            job["success"].append(it["phone"])
-        except Exception as e:
-            acc = (await db.execute(select(Account).where(Account.id == it["id"]))).scalar_one_or_none()
-            if acc:
+                return ("ok", acc.phone)
+            except Exception as e:
                 acc.is_online = False
-            job["failed"].append(f"{it['phone']}: {e}")
-        job["done"] += 1
-    await db.commit()
+                return ("fail", f"{acc.phone}: {e}")
 
-@router.get("/line/online/status/{job_id}")
-async def line_online_status(job_id: str):
-    return LINE_ONLINE_JOBS.get(job_id, {"status": "missing"})
+    results = await asyncio.gather(*[one(a) for a in accs], return_exceptions=True)
+    success, failed = [], []
+    for r in results:
+        if isinstance(r, Exception):
+            failed.append(str(r))
+        elif r[0] == "ok":
+            success.append(r[1])
+        else:
+            failed.append(r[1])
+    await db.commit()
+    return {"success": success, "failed": failed, "msg": f"本线上线 {len(success)}/{len(accs)}"}
 
 
 @router.post("/line/offline")

@@ -339,6 +339,8 @@ function searchAccount(){
 }
 
 function switchTab(name){
+  if(name==='apis' && typeof loadApis==='function') loadApis();
+
   document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden'));
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
   document.getElementById('panel-'+name).classList.remove('hidden');
@@ -523,22 +525,12 @@ async function sendMsg(session){
 }
 function closeChatBox(session){document.getElementById('chatbox-'+session).classList.add('hidden');}
 
-async function lineOnline(proxyName){
-  if (!confirm('确定上线【' + proxyName + '】？')) return;
-  const res = await fetch('/accounts/line/online?proxy_name=' + encodeURIComponent(proxyName), {method:'POST'});
-  const d = await res.json();
-  if(!d.job_id){ alert(d.msg||JSON.stringify(d)); loadAccounts(); return; }
-  alert(d.msg||'已开始后台上线');
-  const poll=async()=>{
-    const s=await (await fetch('/accounts/line/online/status/'+d.job_id)).json();
-    if(s.status==='running'){ setTimeout(poll, 2000); return; }
-    alert((s.msg||'')+'
-失败:
-'+((s.failed||[]).slice(0,8).join('
-')));
-    loadAccounts();
-  };
-  poll();
+async function lineOnline(name){
+  if(!confirm('上线整组?'))return;
+  const res=await fetch('/accounts/line/online?proxy_name='+encodeURIComponent(name),{method:'POST'});
+  const d=await res.json();
+  alert('成功'+(d.success||[]).length+' 失败'+(d.failed||[]).length);
+  loadAccounts();
 }
 async function lineOffline(name){
   if(!confirm('下线整组?'))return;
@@ -689,17 +681,33 @@ async function verifyCode(){
   if(res.ok)loadAccounts();
 }
 async function loadApis(){
-  const list=await(await fetch('/pools/apis')).json();
-  var _as=document.getElementById('apiPoolSummary');
-  if(_as){var u=list.reduce((s,a)=>s+(a.used||0),0);_as.textContent='API 共 '+list.length+' 条 · 号 '+u+' 个';}
-  document.getElementById('apiList').innerHTML=list.map(a=>`<div class="bg-[#0f172a] rounded px-3 py-2 flex items-center gap-2">
-<input type="checkbox" class="api-ck" value="${a.id}">
-<span class="flex-1">${a.name} · 已用${a.used||0} · 剩${a.remain!=null?a.remain:((a.cap||10)-(a.used||0))}</span>
-<button type="button" onclick="deleteApi(${a.id})" class="text-xs px-2 py-0.5 rounded bg-red-800">删除</button>
-</div>`).join('')||'<p class="text-gray-500">暂无</p>';
-  const sel=document.getElementById('selectApi');
-  if(sel)sel.innerHTML=list.filter(a=>a.remain>0).map(a=>`<option value="${a.id}">${a.name}（剩${a.remain}）</option>`).join('');
+  const box=document.getElementById('apiList');
+  const sum=document.getElementById('apiPoolSummary');
+  if(!box) return;
+  box.innerHTML='加载中...';
+  try{
+    const list=await (await fetch('/pools/apis')).json();
+    const arr=Array.isArray(list)?list:(list.items||list.data||[]);
+    const used=arr.reduce((s,a)=>s+(a.used||a.count||0),0);
+    if(sum) sum.textContent='API 共 '+(arr.length)+' 条 · 已绑号 '+used+' 个';
+    if(!arr.length){ box.innerHTML='<div class="text-gray-500 text-sm">暂无 API</div>'; return; }
+    box.innerHTML=arr.map(a=>{
+      const name=a.name||('API-'+a.api_id);
+      const u=a.used||a.count||0;
+      const id=a.id;
+      return `<label class="flex items-center justify-between bg-[#0f172a] rounded px-3 py-2">
+        <span class="flex items-center gap-2 min-w-0">
+          <input type="checkbox" class="api-ck" value="${id}">
+          <span class="truncate">${name} · id ${a.api_id||''} · 号 ${u}</span>
+        </span>
+        <button type="button" onclick="deleteApi(${id})" class="text-xs px-2 py-1 bg-red-800 rounded">删除</button>
+      </label>`;
+    }).join('');
+  }catch(e){
+    box.innerHTML='<div class="text-red-400 text-sm">加载失败 '+e+'</div>';
+  }
 }
+
 async function batchAddApis(){
   const text=document.getElementById('apiBatchText').value.trim();
   if(!text)return;
@@ -992,6 +1000,6 @@ window.rebalanceIp = async function(){
 };
 </script>
 
-<script src="/static/notes.js?v=2"></script>
+<script src="/static/notes.js?v=1"></script>
 </body>
 </html>

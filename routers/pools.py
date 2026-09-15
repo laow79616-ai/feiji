@@ -103,6 +103,10 @@ async def batch_add_apis(req: ApiBatchCreate, db: AsyncSession = Depends(get_db)
                 continue
             
             api_id = int(api_id_str)
+            exist = (await db.execute(select(ApiCredential).where(ApiCredential.api_id==api_id))).scalar_one_or_none()
+            if exist:
+                failed.append(f"{line} 已存在，跳过")
+                continue
             api = ApiCredential(name=name, api_id=api_id, api_hash=api_hash)
             db.add(api)
             success += 1

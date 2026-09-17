@@ -440,3 +440,42 @@ class ClientManager:
                 await asyncio.sleep(max(1, int(interval)))
         return results
 
+    @classmethod
+    async def resolve_peer(cls, session_name: str, q: str):
+        client = await cls.get_client(session_name)
+        if not client or not client.is_connected():
+            raise ValueError("客户端未连接，请先整组上线")
+        raw = (q or "").strip()
+        raw = raw.replace("https://", "").replace("http://", "")
+        raw = raw.replace("t.me/", "").replace("telegram.me/", "").lstrip("@").strip("/")
+        if not raw:
+            raise ValueError("搜索为空")
+        # 常见官方号大小写
+        aliases = {
+            "botfather": "BotFather",
+            "bot_father": "BotFather",
+        }
+        candidates = [raw]
+        if raw.lower() in aliases:
+            candidates.append(aliases[raw.lower()])
+        if raw != raw.capitalize():
+            candidates.append(raw[:1].upper()+raw[1:])
+        if raw.lower()!=raw:
+            candidates.append(raw.lower())
+        last=None
+        entity=None
+        for cand in candidates:
+            try:
+                entity = await client.get_entity(cand)
+                raw=cand
+                break
+            except Exception as e:
+                last=e
+                continue
+        if entity is None:
+            raise last or ValueError("未找到用户")
+        name = getattr(entity, "title", None) or " ".join(filter(None, [
+            getattr(entity, "first_name", None), getattr(entity, "last_name", None)
+        ])).strip() or getattr(entity, "username", None) or str(entity.id)
+        return {"id": int(entity.id), "name": name, "username": getattr(entity, "username", None)}
+

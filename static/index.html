@@ -338,6 +338,106 @@ function searchAccount(){
   }, 50);
 }
 
+
+
+
+
+
+if(!window.__chatSearchHook){
+  window.__chatSearchHook=true;
+  document.addEventListener('input', function(e){
+    const inp=e.target;
+    if(!inp || inp.tagName!=='INPUT') return;
+    const box=inp.closest('[id^="chatbox-"]');
+    if(!box) return;
+    const session=box.id.replace('chatbox-','');
+    if(typeof filterDialogs==='function') filterDialogs(session);
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key!=='Enter') return;
+    const inp=e.target;
+    if(!inp || inp.tagName!=='INPUT') return;
+    const box=inp.closest('[id^="chatbox-"]');
+    if(!box) return;
+    e.preventDefault();
+    const session=box.id.replace('chatbox-','');
+    if(typeof searchChatUser==='function') searchChatUser(session);
+  });
+}
+
+
+function _chatListEl(session){
+  const box=document.getElementById('chatbox-'+session);
+  if(!box) return null;
+  return document.getElementById('dialogs-'+session)
+      || box.querySelector('#dialogs-'+session)
+      || box.querySelector('[id^="dialogs"]')
+      || box.querySelector('.overflow-auto');
+}
+function filterDialogs(session){
+  const box=document.getElementById('chatbox-'+session);
+  if(!box) return;
+  const inp=box.querySelector('input');
+  let q=((inp&&inp.value)||'').trim().toLowerCase();
+  q=q.replace(/^https?:\/\//,'').replace(/^t\.me\//,'').replace(/^@/,'');
+  const list=_chatListEl(session);
+  if(!list) return;
+  const kids=list.children;
+  let shown=0;
+  for(let i=0;i<kids.length;i++){
+    const el=kids[i];
+    if(el.id==='resolve-row') continue;
+    const t=(el.textContent||'').toLowerCase();
+    const ok=!q || t.indexOf(q)>=0;
+    el.style.display=ok?'':'none';
+    if(ok) shown++;
+  }
+}
+async function searchChatUser(session){
+  const box=document.getElementById('chatbox-'+session);
+  if(!box){ alert('没有聊天框'); return; }
+  const inp=box.querySelector('input');
+  const q=(inp&&inp.value||'').trim();
+  if(!q){ filterDialogs(session); return; }
+  filterDialogs(session);
+  const list=_chatListEl(session);
+  let row=document.getElementById('resolve-row');
+  if(row) row.remove();
+  row=document.createElement('div');
+  row.id='resolve-row';
+  row.className='px-2 py-1 text-xs text-yellow-300';
+  row.textContent='正在查找 '+q+' ...';
+  if(list) list.insertBefore(row, list.firstChild);
+  try{
+    const res=await fetch('/chat/resolve?session_name='+encodeURIComponent(session)+'&q='+encodeURIComponent(q));
+    const d=await res.json();
+    if(!d.ok){
+      row.className='px-2 py-1 text-xs text-red-400';
+      row.textContent='未找到: '+(d.msg||res.status);
+      return;
+    }
+    row.className='px-2 py-1 text-sm bg-white/10 cursor-pointer';
+    row.innerHTML='找到：'+(d.name||q)+' <span class="text-xs text-gray-400">@'+(d.username||'')+'</span>';
+    row.onclick=function(){
+      if(typeof openChat==='function') openChat(session, d.id, d.name||q);
+      else if(typeof loadMessages==='function') loadMessages(session, d.id);
+    };
+    
+    currentSession=session; currentChatId=d.id;
+    if(typeof openChat==='function'){ try{ openChat(session, d.id, d.name||q); }catch(e){ console.log(e); } }
+    if(typeof loadMessages==='function'){ try{ loadMessages(session, d.id); }catch(e){ console.log(e); } }
+    if(typeof loadMsgs==='function'){ try{ loadMsgs(session, d.id); }catch(e){ console.log(e); } }
+    const msgs=document.getElementById('msgs-'+session);
+    const sbox=document.getElementById('sendbox-'+session);
+    if(msgs) msgs.classList.remove('hidden');
+    if(sbox) sbox.classList.remove('hidden');
+
+  }catch(e){
+    row.className='px-2 py-1 text-xs text-red-400';
+    row.textContent='请求失败 '+e;
+  }
+}
+
 function switchTab(name){
   if(name==='apis' && typeof loadApis==='function') loadApis();
 
@@ -444,7 +544,7 @@ function selectGroup(name){
       </div>
       <div id="chatbox-${a.session_name}" class="hidden border-t border-gray-700 p-3">
         <div class="flex gap-2 mb-2">
-          <input id="search-${a.session_name}" placeholder="搜索对话" class="flex-1 px-2 py-1 rounded text-sm" oninput="filterDialogs('${a.session_name}')">
+          <input id="search-${a.session_name}" placeholder="搜索对话" class="flex-1 px-2 py-1 rounded text-sm" oninput="filterDialogs('${a.session_name}')" onkeydown="if(event.key==='Enter'){event.preventDefault();searchChatUser('${a.session_name}');}">
           <button onclick="closeChatBox('${a.session_name}')" class="text-xs px-2 py-1 bg-gray-700 rounded">关闭</button>
         </div>
         <div id="dialogs-${a.session_name}" class="max-h-40 overflow-y-auto text-sm mb-2 space-y-1"></div>
@@ -489,10 +589,6 @@ function renderDialogs(session,list){
     <div class="font-medium truncate">${d.name}</div>
     <div class="text-xs text-gray-500">${d.is_group||d.is_channel?'群组':'私聊'}${d.unread?' ·'+d.unread:''}</div>
   </div>`).join('');
-}
-function filterDialogs(session){
-  const kw=(document.getElementById('search-'+session).value||'').toLowerCase();
-  renderDialogs(session,kw?allDialogs.filter(d=>d.name.toLowerCase().includes(kw)):allDialogs);
 }
 async function openMsg(session,chatId){
   currentChatId=chatId;

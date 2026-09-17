@@ -172,3 +172,28 @@ async def profile_photo_from_library(session_name: str = Form(...), filename: st
         return {"ok": True, "msg": "头像已更新"}
     except Exception as e:
         return {"ok": False, "msg": str(e)}
+
+
+@router.get("/resolve")
+async def resolve_chat(session_name: str, q: str):
+    from clients.manager import ClientManager
+    client = await ClientManager.get_client(session_name)
+    if not client:
+        raise HTTPException(400, "客户端未连接")
+    raw = (q or "").strip()
+    if not raw:
+        return {"ok": False, "msg": "空"}
+    try:
+        entity = await client.get_entity(raw)
+        name = getattr(entity, "title", None) or " ".join(filter(None, [
+            getattr(entity, "first_name", None), getattr(entity, "last_name", None)
+        ])).strip() or getattr(entity, "username", None) or str(getattr(entity, "id", raw))
+        return {
+            "ok": True,
+            "id": entity.id,
+            "name": name,
+            "username": getattr(entity, "username", None)
+        }
+    except Exception as e:
+        return {"ok": False, "msg": str(e)}
+

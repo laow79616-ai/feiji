@@ -38,6 +38,7 @@ class Account(Base):
     
     is_active = Column(Boolean, default=True)
     is_online = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
     health_status = Column(String(20), default='unknown')
     is_monitor = Column(Boolean, default=False)
     last_login = Column(DateTime(timezone=True), server_default=func.now())

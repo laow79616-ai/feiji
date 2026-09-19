@@ -2,12 +2,13 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from database import engine, Base
-from routers import accounts, join, chat, targets, pools
+from routers import pool_assign, accounts, join, chat, targets, pools
 import uvicorn
 
 app = FastAPI(title="Telegram 水军管理系统", version="2.0")
 
 app.include_router(accounts.router)
+app.include_router(pool_assign.router)
 app.include_router(join.router)
 app.include_router(chat.router)
 app.include_router(targets.router)

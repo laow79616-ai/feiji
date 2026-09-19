@@ -438,6 +438,19 @@ async function searchChatUser(session){
   }
 }
 
+
+function toggleGroupSel(name,on){
+  document.querySelectorAll("input.acc-chk").forEach(el=>el.checked=!!on);
+}
+async function deleteSelectedAccs(){
+  const ids=[...document.querySelectorAll("input.acc-chk:checked")].map(el=>parseInt(el.dataset.id)).filter(Boolean);
+  if(!ids.length) return alert("先勾选要删的号");
+  if(!confirm("删除选中 "+ids.length+" 个号？")) return;
+  const d=await (await fetch("/accounts/batch-delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ids})})).json();
+  alert("已删 "+(d.deleted||0));
+  loadAccounts();
+}
+
 function switchTab(name){
   if(name==='apis' && typeof loadApis==='function') loadApis();
 
@@ -502,7 +515,7 @@ async function loadAccounts(){
   else if(keys.length) selectGroup(keys[0]);
   else document.getElementById('workArea').innerHTML='<p class="text-gray-500 text-sm">暂无数据</p>';
 
-  const opts=accounts.map(a=>`<option value="${a.session_name}">${a.name||a.phone}</option>`).join('');
+  const opts=accounts.map(a=>`<option value="${a.session_name}">${a.phone||a.name}</option>`).join('');
   const je=document.getElementById('joinAccounts');
   if(je){je.innerHTML=opts;} if(typeof updateJoinCounts==='function') updateJoinCounts();
 }
@@ -524,6 +537,8 @@ function selectGroup(name){
       <button onclick="lineOnline('${name.replace(/'/g,"\\'")}')" class="text-sm px-3 py-1.5 bg-green-700 rounded">整组上线</button>
       <button onclick="lineOffline('${name.replace(/'/g,"\\'")}')" class="text-sm px-3 py-1.5 bg-gray-600 rounded">整组下线</button>
       <button onclick="checkHealthGroup('${name.replace(/'/g,"\\'")}')" class="text-sm px-3 py-1.5 bg-amber-700 rounded">检测活跃</button>
+      <label class="text-xs text-gray-300 ml-2"><input type="checkbox" class="mr-1" onchange="toggleGroupSel(name,this.checked)">全选</label>
+      <button type="button" onclick="deleteSelectedAccs()" class="text-sm px-3 py-1.5 bg-red-800 rounded">删除所选</button>
     </div>
   </div>
   <div class="space-y-2">`;
@@ -533,13 +548,14 @@ function selectGroup(name){
     html+=`<div class="bg-[#0f172a] rounded-lg overflow-hidden">
       <div class="px-3 py-2 flex items-center justify-between gap-2">
         <div>
-          <div class="text-sm">${a.name||a.phone}${a.is_monitor?' <span class="text-purple-400 text-xs">监</span>':''}</div>
+          <div class="text-sm">${a.phone||a.name}${a.is_monitor?' <span class="text-purple-400 text-xs">监</span>':''}</div>
           <div class="text-xs ${a.is_online?'text-green-400':'text-red-400'}">${a.is_online?'在线':'离线'}${a.health_status==='frozen'?' ·冻结':a.health_status==='dead'?' ·已死':a.health_status==='active'?' ·活跃':''}</div>
+          <div class="text-[11px] text-gray-500">加入 ${a.created_at||'-'}</div>
         </div>
         <div class="flex gap-2">
-          <button onclick="toggleChat('${a.session_name}','${(a.name||a.phone).replace(/'/g,'')}')" class="text-sm px-3 py-1 bg-blue-700 rounded">聊天</button>
-          <button onclick="openProfile('${a.session_name}','${(a.name||a.phone).replace(/'/g,'')}')" class="text-sm px-3 py-1 bg-gray-700 rounded">资料</button>
-<button onclick="deleteAccount(${a.id})" class="text-sm px-3 py-1 bg-red-800 rounded">删除</button>
+          <button onclick="toggleChat('${a.session_name}','${(a.phone||a.name).replace(/'/g,'')}')" class="text-sm px-3 py-1 bg-blue-700 rounded">聊天</button>
+          <button onclick="openProfile('${a.session_name}','${(a.phone||a.name).replace(/'/g,'')}')" class="text-sm px-3 py-1 bg-gray-700 rounded">资料</button>
+<label class="inline-flex items-center"><input type="checkbox" class="acc-chk mr-2" style="width:22px;height:22px;transform:scale(1.35);transform-origin:center" data-id="${a.id}"></label><button onclick="deleteAccount(${a.id})" class="text-sm px-3 py-1 bg-red-800 rounded">删除</button>
         </div>
       </div>
       <div id="chatbox-${a.session_name}" class="hidden border-t border-gray-700 p-3">

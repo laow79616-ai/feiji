@@ -7,6 +7,8 @@ from typing import List, Optional
 import uuid
 
 from database import get_db
+IMPORT_JOBS={}
+
 LINE_ONLINE_JOBS = {}
 
 from models import Account, ApiCredential, Proxy
@@ -64,6 +66,8 @@ async def add_account(req: AddAccountRequest, db: AsyncSession = Depends(get_db)
 
     session_name = f"acc_{uuid.uuid4().hex[:8]}"
     account = Account(
+                    created_at=__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    
         phone=req.phone,
         name=req.name or req.phone,
         session_name=session_name,
@@ -135,6 +139,7 @@ async def list_accounts(db: AsyncSession = Depends(get_db)):
             "api_name": api.name if api else "-",
             "proxy_name": proxy.name if proxy else "-",
             "is_online": a.is_online,
+            "created_at": (str(a.created_at) if getattr(a,"created_at",None) else None),
             "is_monitor": bool(getattr(a, "is_monitor", False)),
             "health_status": getattr(a, "health_status", None) or "unknown",
             "note": a.note
@@ -368,7 +373,7 @@ async def check_health(req: CheckHealthRequest = None, db: AsyncSession = Depend
 async def import_zip(
     file: UploadFile = File(...),
     api_id: int = Form(None),
-    proxy_id: int = Form(None),
+    proxy_id: list[int] | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     """ZIP导入：先检测活跃，死号不导入；自动分配到未满10的代理"""
@@ -546,100 +551,7 @@ async def import_zip(
 
 import_jobs = {}
 
-@router.post("/import-zip/start")
-async def import_zip_start(
-    file: UploadFile = File(...),
-    api_id: int = Form(None),
-    proxy_id: int = Form(None),
-    db: AsyncSession = Depends(get_db),
-):
-    """上传后立即返回 job_id，后台检测导入"""
-    import os, uuid, tempfile, shutil
-    if not file.filename.lower().endswith(".zip"):
-        raise HTTPException(400, "请上传 zip")
-    tmpdir = tempfile.mkdtemp(prefix="tgzip_")
-    zip_path = os.path.join(tmpdir, "upload.zip")
-    with open(zip_path, "wb") as f:
-        f.write(await file.read())
-    job_id = uuid.uuid4().hex[:12]
-    import_jobs[job_id] = {
-        "id": job_id,
-        "status": "pending",
-        "total": 0,
-        "done": 0,
-        "success": 0,
-        "dead": 0,
-        "failed": 0,
-        "details": [],
-        "msg": "排队中",
-        "stop": False,
-    }
-    asyncio.create_task(_run_import_job(job_id, zip_path, tmpdir, api_id, proxy_id))
-    return {"job_id": job_id, "msg": "已开始后台导入"}
 
-@router.get("/import-zip/status/{job_id}")
-async def import_zip_status(job_id: str):
-    job = import_jobs.get(job_id)
-    if not job:
-        raise HTTPException(404, "任务不存在")
-    return job
-
-async def _run_import_job(job_id, zip_path, tmpdir, api_id, proxy_id):
-    """复用原 import_zip 逻辑较复杂，这里直接调用原函数文件流不好。
-    简化：打开原 import_zip 内部流程 —— 若失败则标记 error。
-    """
-    job = import_jobs[job_id]
-    job["status"] = "running"
-    try:
-        # 动态调用：构造一个假 UploadFile 不可行，改为把 zip 交给同步导入核心
-        from database import get_db
-        agen = get_db()
-        db = await agen.__anext__()
-        try:
-            class _F:
-                filename = "upload.zip"
-                async def read(self):
-                    with open(zip_path, "rb") as f:
-                        return f.read()
-            result = await import_zip(_F(), api_id, proxy_id, db)
-        finally:
-            try:
-                await agen.aclose()
-            except Exception:
-                pass
-        job["success"] = result.get("success", 0)
-        job["dead"] = result.get("dead_count", 0)
-        job["failed"] = result.get("failed_count", 0)
-        job["details"] = (result.get("ok_list") or []) + (result.get("dead") or []) + (result.get("failed") or [])
-        job["total"] = job["success"] + job["dead"] + job["failed"]
-        job["done"] = job["total"]
-        job["msg"] = result.get("msg", "完成")
-        job["status"] = "finished"
-    except Exception as e:
-        job["status"] = "error"
-        job["msg"] = str(e)
-    finally:
-        import shutil
-        shutil.rmtree(tmpdir, ignore_errors=True)
-
-
-check_all_jobs = {}
-
-@router.post("/check-all/start")
-async def check_all_start(db: AsyncSession = Depends(get_db)):
-    import uuid, asyncio
-    from sqlalchemy import select
-    from models import Account
-    r = await db.execute(select(Account))
-    accs = r.scalars().all()
-    job_id = uuid.uuid4().hex[:12]
-    check_all_jobs[job_id] = {
-        "id": job_id, "status": "pending",
-        "total": len(accs), "done": 0, "alive": 0, "dead": 0, "failed": 0
-    }
-    names = [a.session_name for a in accs]
-    asyncio.create_task(_run_check_all(job_id, names))
-    return {"job_id": job_id, "total": len(names)}
 
 @router.get("/check-all/status/{job_id}")
 async def check_all_status(job_id: str):
@@ -706,49 +618,119 @@ async def _run_check_all(job_id, session_names):
     job["status"] = "finished"
 
 @router.post("/rebalance")
-async def rebalance_accounts(db: AsyncSession = Depends(get_db)):
-    """水军号均匀分配到现有代理和 API，号保留在库"""
-    from sqlalchemy import select, update
-    from models import Account, Proxy, ApiCredential
-    accs = (await db.execute(select(Account).order_by(Account.id))).scalars().all()
-    proxies = (await db.execute(select(Proxy).order_by(Proxy.id))).scalars().all()
-    apis = (await db.execute(select(ApiCredential).order_by(ApiCredential.id))).scalars().all()
-    if not accs:
-        return {"ok": False, "msg": "库里没有水军号"}
-    if not proxies:
-        return {"ok": False, "msg": "请先添加代理IP"}
-    pn, an = len(proxies), len(apis)
-    for i, acc in enumerate(accs):
-        acc.proxy_id = proxies[i % pn].id
-        if an:
-            acc.api_id = apis[i % an].id
-    await db.commit()
-    per_p = {p.name: 0 for p in proxies}
-    for i, acc in enumerate(accs):
-        per_p[proxies[i % pn].name] += 1
-    return {
-        "ok": True,
-        "accounts": len(accs),
-        "proxies": pn,
-        "apis": an,
-        "each_proxy_about": (len(accs) + pn - 1) // pn,
-        "msg": f"已分配 {len(accs)} 个号到 {pn} 条IP" + (f"、{an} 条API" if an else "（暂无API）")
-    }
+async def rebalance_disabled(*args, **kwargs):
+    return {"ok": True, "msg": "已禁用重排"}
+
 
 @router.post("/rebalance-ip")
-async def rebalance_ip(db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import select
-    from models import Account, Proxy
-    accs = (await db.execute(select(Account).order_by(Account.id))).scalars().all()
-    proxies = (await db.execute(select(Proxy).order_by(Proxy.id))).scalars().all()
-    if not accs:
-        return {"ok": False, "msg": "库里没有水军号"}
-    if not proxies:
-        return {"ok": False, "msg": "请先添加代理IP"}
-    n = len(proxies)
-    for i, acc in enumerate(accs):
-        acc.proxy_id = proxies[i % n].id
+async def rebalance_disabled(*args, **kwargs):
+    return {"ok": True, "msg": "已禁用重排"}
+
+
+from pydantic import BaseModel
+from typing import List, Optional
+
+class AssignProxyReq(BaseModel):
+    session_names: List[str]
+    proxy_id: int
+
+@router.get("/pool/unassigned")
+async def list_unassigned(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Account).where(Account.proxy_id.is_(None)))
+    rows = result.scalars().all()
+    return [{
+        "id": a.id,
+        "phone": a.phone,
+        "name": a.name,
+        "session_name": a.session_name,
+        "created_at": (str(a.created_at) if getattr(a,"created_at",None) else None),
+        "health_status": getattr(a, "health_status", None),
+    } for a in rows]
+
+@router.post("/pool/assign")
+async def assign_proxy(req: AssignProxyReq, db: AsyncSession = Depends(get_db)):
+    from models import Proxy
+    pr = await db.execute(select(Proxy).where(Proxy.id == req.proxy_id))
+    proxy = pr.scalar_one_or_none()
+    if not proxy:
+        return {"ok": False, "msg": "线路不存在"}
+    used = (await db.execute(select(Account).where(Account.proxy_id == proxy.id))).scalars().all()
+    remain = 10 - len(used)
+    if remain <= 0:
+        return {"ok": False, "msg": "该线路已满10个"}
+    ok, fail = [], []
+    names = req.session_names[:remain]
+    extra_cnt = len(req.session_names) - len(names)
+    for sn in names:
+        r = await db.execute(select(Account).where(Account.session_name == sn))
+        acc = r.scalar_one_or_none()
+        if not acc:
+            fail.append(sn + " 不存在")
+            continue
+        if acc.proxy_id:
+            fail.append((acc.phone or sn) + " 已绑定线路，不移动")
+            continue
+        acc.proxy_id = proxy.id
+        ok.append(acc.phone or sn)
     await db.commit()
-    return {"ok": True, "accounts": len(accs), "proxies": n, "each": (len(accs)+n-1)//n,
-            "msg": f"已把 {len(accs)} 个水军号均匀分配到 {n} 条IP"}
+    msg = "已分配 %d 个到 %s" % (len(ok), proxy.name)
+    if extra_cnt > 0:
+        msg += "；线路剩余不足，%d 个仍留在添加池" % extra_cnt
+    return {"ok": True, "assigned": ok, "failed": fail, "msg": msg}
+
+@router.post("/import-zip/start")
+async def import_zip_start(
+    file: UploadFile = File(...),
+    proxy_id: list[int] | None = Form(None),
+    api_id: int = Form(None),
+):
+    import uuid, os, asyncio
+    os.makedirs("/tmp/tg_import", exist_ok=True)
+    job_id = uuid.uuid4().hex[:12]
+    zip_path = f"/tmp/tg_import/{job_id}.zip"
+    with open(zip_path, "wb") as f:
+        f.write(await file.read())
+    IMPORT_JOBS[job_id] = {"status":"pending","success":0,"dead":0,"failed":0,"details":[],"msg":"排队中"}
+    asyncio.create_task(_run_import_job(job_id, zip_path, proxy_id, api_id))
+    return {"job_id": job_id}
+
+@router.get("/import-zip/status/{job_id}")
+async def import_zip_status(job_id: str):
+    return IMPORT_JOBS.get(job_id, {"status":"missing","msg":"任务不存在"})
+
+async def _run_import_job(job_id, zip_path, proxy_id, api_id):
+    from routers.import_runner import run_zip_import
+    from database import AsyncSessionLocal
+    job = IMPORT_JOBS.setdefault(job_id, {"status":"pending","success":0,"dead":0,"failed":0,"details":[]})
+    try:
+        async with AsyncSessionLocal() as db:
+            pids = proxy_id if isinstance(proxy_id, list) else ([proxy_id] if proxy_id else [])
+            await run_zip_import(db, zip_path, job, proxy_id=(pids[0] if pids else None), api_id=api_id, proxy_ids=pids)
+    except Exception as e:
+        job["status"]="error"
+        job["msg"]=str(e)
+
+class BatchDeleteReq(BaseModel):
+    ids: list[int]
+
+@router.post("/batch-delete")
+async def batch_delete(req: BatchDeleteReq, db: AsyncSession = Depends(get_db)):
+    from clients.manager import clients
+    deleted = 0
+    for aid in req.ids:
+        r = await db.execute(select(Account).where(Account.id == aid))
+        acc = r.scalar_one_or_none()
+        if not acc:
+            continue
+        sn = acc.session_name
+        try:
+            if sn in clients:
+                await clients[sn].disconnect()
+                del clients[sn]
+        except Exception:
+            pass
+        await db.delete(acc)
+        deleted += 1
+    await db.commit()
+    return {"deleted": deleted}
 

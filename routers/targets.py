@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from models import Target
-from clients.manager import ClientManager
+from clients.manager import ClientManager, is_dead_session_error
 
 router = APIRouter(prefix="/targets", tags=["目标群组频道"])
 JOIN_JOBS = {}
@@ -174,7 +174,7 @@ async def _run_join_job_inner(job_id: str, session_names: list, links: list, int
     from collections import defaultdict
     from sqlalchemy import select
     from models import Account, Proxy
-    from clients.manager import ClientManager, clients
+    from clients.manager import ClientManager, is_dead_session_error, clients
     from database import get_db
 
     global JOIN_JOBS
@@ -228,20 +228,29 @@ async def _run_join_job_inner(job_id: str, session_names: list, links: list, int
                 pass
             clients.pop(session_name, None)
 
-    for proxy_id, members in groups.items():
+    skip_sessions=set()
+    from collections import deque
+    queues = {pid: deque(mem) for pid, mem in groups.items()}
+    pids = list(groups.keys())
+    while any(queues[pid] for pid in pids):
         if job.get("stop"):
             job["status"] = "stopped"
             job["msg"] = "已停止"
             return
-        px = proxies.get(proxy_id)
-        proxy_str = px.proxy_str if px else None
-        job["msg"] = f"上线 {getattr(px,'name',proxy_id)} · {len(members)} 个号"
-
-        for acc in members:
+        for proxy_id in pids:
             if job.get("stop"):
                 job["status"] = "stopped"
+                job["msg"] = "已停止"
                 return
+            if not queues.get(proxy_id):
+                continue
+            acc = queues[proxy_id].popleft()
+            px = proxies.get(proxy_id)
+            proxy_str = px.proxy_str if px else None
             session_name = acc.session_name
+            if session_name in skip_sessions:
+                continue
+            job["msg"] = f"轮询 {getattr(px,'name',proxy_id)} · {session_name}"
             # 上线（带代理，禁止裸连）
             try:
                 await ClientManager.reconnect(session_name, proxy_str)
@@ -264,6 +273,12 @@ async def _run_join_job_inner(job_id: str, session_names: list, links: list, int
                 job["current"] = f"{session_name} -> {link}"
                 try:
                     r = await ClientManager.join_group_or_channel(session_name, link)
+                    msg = (r.get("msg") if isinstance(r, dict) else str(r)) or ""
+                    if is_dead_session_error(msg):
+                        skip_sessions.add(session_name)
+                        if isinstance(r, dict):
+                            r["msg"] = "废号已跳过: " + msg[:160]
+                            r["skip"] = True
                 except Exception as e:
                     r = {"success": False, "msg": str(e), "already": False}
                 ok = bool(r.get("success"))

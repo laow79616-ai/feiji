@@ -14,6 +14,24 @@ from telethon.errors import (
 )
 from config import API_ID, API_HASH, SESSIONS_DIR
 
+
+
+DEAD_SESSION_KEYS = (
+    "SESSION_REVOKED",
+    "AUTH_KEY",
+    "authorization key",
+    "two different IP",
+    "two different IP addresses",
+    "Session 无效",
+    "USER_DEACTIVATED",
+    "deactivated",
+    "unauthorized",
+)
+
+def is_dead_session_error(msg: str) -> bool:
+    s = (msg or "").lower()
+    return any(k.lower() in s for k in DEAD_SESSION_KEYS)
+
 clients: Dict[str, TelegramClient] = {}
 code_cache: Dict[str, List[dict]] = {}
 

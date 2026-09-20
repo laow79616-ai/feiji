@@ -16,3 +16,12 @@ imported_phones.txt
 *.old
 static/index.html.bak*
 static/index.html.broken
+venv/
+__pycache__/
+*.pyc
+sessions/
+media/
+uploads/
+*.db
+*.session
+imported_phones.txt

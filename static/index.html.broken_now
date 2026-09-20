@@ -1,0 +1,997 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TG 水军管理系统</title>
+<script src="https://cdn.tailwindcss.com">
+function proxySelectAll(on){
+  document.querySelectorAll('.proxy-ck').forEach(c=>c.checked=!!on);
+}
+function selectedProxyIds(){
+  return [...document.querySelectorAll('.proxy-ck:checked')].map(c=>parseInt(c.value)).filter(Boolean);
+}
+async function deleteProxy(id, name){
+  if(!confirm('删除代理【'+(name||id)+'】？有号的线路不会删')) return;
+  const r=await fetch('/pools/proxies/'+id,{method:'DELETE'});
+  let d={}; try{d=await r.json()}catch(e){return alert('失败')}
+  if(!r.ok) return alert(d.detail||JSON.stringify(d));
+  if(typeof loadProxies==='function') loadProxies();
+}
+async function deleteSelectedProxies(){
+  const ids=selectedProxyIds();
+  if(!ids.length) return alert('先勾选');
+  if(!confirm('删除选中 '+ids.length+' 条？有号的会跳过')) return;
+  const r=await fetch('/pools/proxies/delete-batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
+  const d=await r.json();
+  alert((d.msg||'')+'\n跳过: '+(d.skipped||[]).join('\n'));
+  if(typeof loadProxies==='function') loadProxies();
+}
+async function deleteAllProxies(){
+  if(!confirm('清空全部代理IP？水军号会留在库里，稍后可一键重新分配')) return;
+  const r=await fetch('/pools/proxies/clear-all',{method:'POST'});
+  let d={}; try{d=await r.json()}catch(e){return alert('失败')}
+  alert(d.msg||JSON.stringify(d));
+  if(typeof loadProxies==='function') loadProxies();
+  if(typeof loadAccounts==='function') loadAccounts();
+}
+
+
+function apiSelectAll(on){
+  document.querySelectorAll('.api-ck').forEach(c=>c.checked=!!on);
+}
+function selectedApiIds(){
+  return [...document.querySelectorAll('.api-ck:checked')].map(c=>parseInt(c.value)).filter(Boolean);
+}
+async function deleteApi(id){
+  if(!confirm('删除该 API？水军号会留在库里')) return;
+  const r=await fetch('/pools/apis/'+id,{method:'DELETE'});
+  let d={}; try{d=await r.json()}catch(e){return alert('失败')}
+  if(!r.ok) return alert(d.detail||JSON.stringify(d));
+  if(typeof loadApis==='function') loadApis();
+}
+async function deleteSelectedApis(){
+  const ids=selectedApiIds();
+  if(!ids.length) return alert('先勾选');
+  if(!confirm('删除选中 '+ids.length+' 条 API？号留在库')) return;
+  const r=await fetch('/pools/apis/delete-batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
+  const d=await r.json();
+  alert(d.msg||JSON.stringify(d));
+  if(typeof loadApis==='function') loadApis();
+}
+async function deleteAllApis(){
+  if(!confirm('清空全部 API？水军号留在库，稍后重新分配')) return;
+  const r=await fetch('/pools/apis/clear-all',{method:'POST'});
+  let d={}; try{d=await r.json()}catch(e){return alert('失败')}
+  alert(d.msg||JSON.stringify(d));
+  if(typeof loadApis==='function') loadApis();
+  if(typeof loadAccounts==='function') loadAccounts();
+}
+
+
+async function rebalanceAccounts(){
+  if(!confirm('把库里全部水军号均匀分配到当前代理（有API也一起均匀分）？')) return;
+  const r=await fetch('/accounts/rebalance',{method:'POST'});
+  let d={}; try{d=await r.json()}catch(e){return alert('请求失败')}
+  alert(d.msg||JSON.stringify(d));
+  if(typeof loadProxies==='function') loadProxies();
+  if(typeof loadApis==='function') loadApis();
+  if(typeof loadAccounts==='function') loadAccounts();
+}
+
+
+
+
+
+
+
+</script>
+<style>
+body{background:#0b1120;color:#e2e8f0}
+.card{background:#111827;border:1px solid #1f2937}
+.nav-item.active{background:#2563eb;color:#fff}
+.nav-item:not(.active):hover{background:#1f2937}
+.group-item{cursor:pointer;border:1px solid #1f2937}
+.group-item.active{border-color:#2563eb;background:#1e3a5f}
+.group-item:hover{background:#1f2937}
+input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
+.btn-primary{background:#2563eb}
+.btn-success{background:#059669}
+.chat-me{background:#2563eb;border-radius:12px 12px 4px 12px}
+.chat-other{background:#1f2937;border-radius:12px 12px 12px 4px}
+</style>
+</head>
+<body class="min-h-screen">
+<div class="border-b border-gray-800 sticky top-0 z-50 bg-[#0b1120]">
+<div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
+<div class="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center">✈️</div>
+<div><h1 class="text-lg font-bold">TG 水军管理系统</h1>
+<p class="text-xs text-gray-500">左侧选线路 · 右侧操作水军</p></div>
+</div></div>
+
+<div class="max-w-6xl mx-auto px-4 py-4">
+<div class="flex gap-2 mb-4 flex-wrap">
+<button onclick="switchTab('accounts')" id="tab-accounts" class="nav-item active px-3 py-1.5 rounded-lg text-sm">水军管理</button>
+<button onclick="switchTab('add')" id="tab-add" class="nav-item px-3 py-1.5 rounded-lg text-sm">增加水军</button>
+<button onclick="switchTab('apis')" id="tab-apis" class="nav-item px-3 py-1.5 rounded-lg text-sm">API池</button>
+<button onclick="switchTab('proxies')" id="tab-proxies" class="nav-item px-3 py-1.5 rounded-lg text-sm">代理池</button>
+<button onclick="switchTab('targets')" id="tab-targets" class="nav-item px-3 py-1.5 rounded-lg text-sm">目标</button>
+<button onclick="switchTab('join')" id="tab-join" class="nav-item px-3 py-1.5 rounded-lg text-sm">开始批量加入</button>
+    <a href="/logout" class="nav-item px-3 py-1.5 rounded-lg text-sm bg-red-800 ml-auto">退出</a>
+    <button type="button" onclick="checkAllHealth()" class="nav-item px-3 py-1.5 rounded-lg text-sm bg-amber-700">一键全部检测</button>
+</div>
+
+<div id="panel-accounts" class="panel">
+<div class="flex gap-4" style="min-height:70vh">
+  <!-- 左侧分组 -->
+  <div class="w-80 shrink-0">
+    <div class="card rounded-xl p-3 sticky top-20">
+      <div class="flex justify-between items-center mb-3">
+        <span class="font-semibold text-sm">线路分组</span></div>
+<input id="accSearch" onkeydown="if(event.key==='Enter')searchAccount()"  id="lineSearch" type="text" placeholder="搜索线路 / 号码 / 名称" class="w-full mt-2 mb-2 px-2 py-1 rounded text-sm bg-[#0f172a] text-white" oninput="filterLines()" id="accSearch" onkeydown="if(event.key==='Enter')searchAccount()">
+<div style="display:none"><span></span>
+        <button onclick="loadAccounts()" class="text-xs px-2 py-1 bg-gray-800 rounded">刷新</button>
+      </div>
+      <div id="groupNav" class="space-y-2 max-h-[70vh] overflow-y-auto"></div>
+    </div>
+  </div>
+  <!-- 右侧工作区 -->
+  <div class="flex-1 min-w-0">
+    <div id="workArea" class="card rounded-xl p-4">
+      <p class="text-gray-500 text-sm">请从左侧选择一条线路</p>
+    </div>
+  </div>
+</div>
+</div>
+
+<div id="panel-add" class="panel hidden">
+<div class="card rounded-xl p-5 mb-4">
+<div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+<input id="phone" placeholder="手机号" class="px-3 py-2 rounded">
+<input id="name" placeholder="备注" class="px-3 py-2 rounded">
+<select id="selectApi" class="px-3 py-2 rounded"></select>
+<select id="selectProxy" class="px-3 py-2 rounded"></select>
+</div>
+<button onclick="addAccount()" class="btn-primary px-5 py-2 rounded">发送验证码</button>
+<p id="addMsg" class="mt-2 text-sm text-green-400"></p>
+</div>
+<div class="card rounded-xl p-5">
+<div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+<input id="verifyPhone" placeholder="手机号" class="px-3 py-2 rounded">
+<input id="code" placeholder="验证码" class="px-3 py-2 rounded">
+<input id="password" placeholder="两步密码" class="px-3 py-2 rounded">
+</div>
+<button onclick="verifyCode()" class="btn-success px-5 py-2 rounded">确认登录</button>
+<p id="verifyMsg" class="mt-2 text-sm text-green-400"></p>
+</div>
+
+    <div id="zipImportBox" class="card rounded-xl p-5 mt-4">
+      <h3 class="font-semibold mb-2 text-sm">上传 ZIP 批量导入（.session + .json）</h3>
+      <p class="text-xs text-gray-400 mb-2">死号不导入，活号自动分配到未满线路。</p>
+      <input type="file" id="zipFile" accept=".zip" class="text-sm mb-3">
+      <button type="button" onclick="importZip()" class="btn-primary px-5 py-2 rounded">上传并导入</button>
+      <pre id="zipResult" class="mt-2 text-xs bg-black/30 p-2 rounded max-h-40 overflow-auto"></pre>
+    </div>
+
+</div>
+
+<div id="panel-apis" class="panel hidden">
+<div class="card rounded-xl p-5 mb-4">
+<textarea id="apiBatchText" rows="4" class="w-full px-3 py-2 rounded text-sm mb-3"></textarea>
+<button onclick="batchAddApis()" class="btn-primary px-5 py-2 rounded">批量添加</button>
+<p id="apiMsg" class="mt-2 text-sm text-green-400"></p>
+</div>
+<div class="card rounded-xl p-5"><div id="apiPoolSummary" class="text-xs text-gray-400 mb-2"></div><div id="apiTools" class="flex flex-wrap gap-2 mb-3 items-center">
+<button type="button" onclick="apiSelectAll(true)" class="text-xs px-3 py-1 rounded bg-slate-700">全选</button>
+<button type="button" onclick="apiSelectAll(false)" class="text-xs px-3 py-1 rounded bg-slate-700">取消全选</button>
+<button type="button" onclick="deleteSelectedApis()" class="text-xs px-3 py-1 rounded bg-red-800">删除选中</button>
+<button type="button" onclick="deleteAllApis()" class="text-xs px-3 py-1 rounded bg-red-900">全部删除</button>
+
+</div>
+<div id="apiList" class="space-y-2 text-sm"></div></div>
+</div>
+
+<div id="panel-proxies" class="panel hidden">
+<div class="card rounded-xl p-5 mb-4">
+<textarea id="proxyBatchText" rows="4" class="w-full px-3 py-2 rounded text-sm mb-3"></textarea>
+<button onclick="batchAddProxies()" class="btn-primary px-5 py-2 rounded">批量添加</button>
+<p id="proxyMsg" class="mt-2 text-sm text-green-400"></p>
+</div>
+<div class="card rounded-xl p-5"><div id="proxyPoolSummary" class="text-xs text-gray-400 mb-2"></div><div id="proxyTools" class="flex flex-wrap gap-2 mb-3 items-center">
+<button type="button" onclick="proxySelectAll(true)" class="text-xs px-3 py-1 rounded bg-slate-700">全选</button>
+<button type="button" onclick="proxySelectAll(false)" class="text-xs px-3 py-1 rounded bg-slate-700">取消全选</button>
+<button type="button" onclick="deleteSelectedProxies()" class="text-xs px-3 py-1 rounded bg-red-800">删除选中</button>
+<button type="button" onclick="deleteAllProxies()" class="text-xs px-3 py-1 rounded bg-red-900">全部删除</button>
+<button type="button" onclick="window.rebalanceIp()" class="text-xs px-3 py-1 rounded bg-emerald-700">一键均匀分配</button>
+</div>
+<div id="proxyList" class="space-y-2 text-sm"></div></div>
+</div>
+
+<div id="panel-targets" class="panel hidden">
+<div class="card rounded-xl p-5 mb-4">
+<div class="flex gap-3 mb-3">
+<input id="targetName" placeholder="备注" class="px-3 py-2 rounded flex-1">
+<input id="targetLink" placeholder="链接" class="px-3 py-2 rounded flex-[2]">
+</div>
+<button onclick="addTarget()" class="btn-primary px-5 py-2 rounded">添加</button>
+<p id="targetMsg" class="mt-2 text-sm text-green-400"></p>
+</div>
+<div class="card rounded-xl p-5"><div id="targetList" class="space-y-2 text-sm"></div></div>
+</div>
+
+<div id="panel-join" class="panel hidden">
+<div class="card rounded-xl p-5">
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+<div class="text-xs text-gray-400 mb-1">水军池共 <span id="joinAccCount">0</span> 个 · 已选 <span id="joinAccSelected">0</span></div>
+<div class="flex gap-2 mb-2">
+  <button type="button" id="joinSelectAll" onclick="toggleJoinAccounts()" class="text-xs px-3 py-1 rounded bg-slate-700">一键全选</button>
+  <button type="button" onclick="clearJoinAccounts()" class="text-xs px-3 py-1 rounded bg-slate-700">取消全选</button>
+</div>
+<select id="joinAccounts" onchange="updateJoinCounts()" multiple class="h-36 px-2 py-1 rounded text-sm"></select>
+<div class="text-xs text-gray-400 mb-1">目标共 <span id="joinTargetCount">0</span> 个 · 已选 <span id="joinTargetSelected">0</span></div>
+<select id="joinTargets" onchange="updateJoinCounts()" multiple class="h-36 px-2 py-1 rounded text-sm"></select>
+</div>
+<div class="flex items-center gap-3 mb-3 flex-wrap">
+  <label class="text-sm text-gray-400">间隔(秒)</label>
+  <input id="joinInterval" type="number" value="180" min="5" class="w-24 px-2 py-1 rounded text-sm">
+  <button onclick="doJoin()" class="btn-primary px-6 py-2 rounded">开始批量加入</button>
+  <button onclick="doLeave()" class="px-6 py-2 rounded bg-red-800">一键退出</button>
+  <button onclick="stopJoinJob()" class="px-6 py-2 rounded bg-orange-700">停止加入</button>
+</div>
+<div id="joinStatus" class="text-sm space-y-1 mb-3 max-h-40 overflow-y-auto"></div>
+<div id="joinLiveList" class="mt-3 max-h-64 overflow-y-auto text-sm space-y-1"></div><pre id="joinResult" class="mt-2 text-xs bg-black/30 p-3 rounded max-h-48 overflow-auto"></pre>
+</div>
+</div>
+</div>
+
+<script>
+let allGroups={}, currentGroup=null, currentSession=null, currentChatId=null, allDialogs=[];
+
+
+async function checkHealthGroup(proxyName){
+  try{
+    let accs=[];
+    if(typeof allGroups!=='undefined' && allGroups[proxyName]) accs=allGroups[proxyName];
+    else if(typeof allAccounts!=='undefined') accs=allAccounts.filter(a=>(a.proxy_name||a.proxy||'')===proxyName);
+    const names=accs.map(a=>a.session_name).filter(Boolean);
+    if(!names.length) return alert('该组无账号：'+proxyName);
+    if(!confirm('检测线路【'+proxyName+'】共 '+names.length+' 个号？')) return;
+    const res=await fetch('/accounts/check-health',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_names:names})
+    });
+    const text=await res.text();
+    let d; try{ d=JSON.parse(text); }catch(e){ return alert('请重新登录'); }
+    alert('活跃 '+(d.active||0)+' / 死号 '+(d.dead||0)+' / 失败 '+(d.failed||0)+' / 共 '+(d.total||names.length));
+    if(typeof loadAccounts==='function') loadAccounts();
+  }catch(e){ alert('检测失败 '+e); }
+}
+
+
+async function checkAllHealth(){
+  if(!confirm('后台检测全部水军？测完自动标记死号，请勿同时整组上线')) return;
+  const r=await fetch('/accounts/check-all/start',{method:'POST'});
+  const d=await r.json();
+  if(!d.job_id) return alert(JSON.stringify(d));
+  alert('已开始后台检测 job='+d.job_id+' 共 '+(d.total||''));
+  const poll=async()=>{
+    const s=await(await fetch('/accounts/check-all/status/'+d.job_id)).json();
+    const el=document.getElementById('checkAllMsg');
+    if(el) el.textContent='检测 '+(s.done||0)+'/'+(s.total||0)+' 活'+(s.alive||0)+' 死'+(s.dead||0);
+    if(s.status==='running'||s.status==='pending') setTimeout(poll,3000);
+    else {
+      alert('检测完成 活 '+(s.alive||0)+' 死 '+(s.dead||0)+' 失败 '+(s.failed||0));
+      if(typeof loadAccounts==='function') loadAccounts();
+    }
+  };
+  poll();
+}
+
+
+function filterLines(){
+  const q=(document.getElementById('lineSearch')?.value||'').trim().toLowerCase();
+  document.querySelectorAll('[data-line],[data-proxy],.line-item,#lineList > *,#groupList > *').forEach(el=>{
+    const t=(el.innerText||el.textContent||'').toLowerCase();
+    el.style.display = (!q || t.includes(q)) ? '' : 'none';
+  });
+}
+
+
+function filterAccounts(){
+  const q=(document.getElementById('accSearch')||{}).value||'';
+  const s=q.trim().toLowerCase().replace(/\s+/g,'');
+  document.querySelectorAll('[data-group],[data-phone],.group-item,.acc-row').forEach(el=>{
+    const t=((el.dataset.phone||el.dataset.group||el.textContent)||'').toLowerCase().replace(/\s+/g,'');
+    el.style.display = (!s || t.indexOf(s)>=0) ? '' : 'none';
+  });
+}
+
+
+function searchAccount(){
+  const el=document.getElementById('accSearch');
+  const q=((el&&el.value)||'').trim().toLowerCase().replace(/[\s+]/g,'');
+  if(!q){ if(currentGroup) selectGroup(currentGroup); return; }
+  if(typeof allGroups!=='object' || !allGroups) return;
+  let foundGroup=null, found=null;
+  for(const [g, arr] of Object.entries(allGroups)){
+    for(const a of (arr||[])){
+      const phone=String(a.phone||'').toLowerCase().replace(/[\s+]/g,'');
+      const name=String(a.name||'').toLowerCase();
+      const sess=String(a.session_name||'').toLowerCase();
+      if(phone.indexOf(q)>=0 || name.indexOf(q)>=0 || sess.indexOf(q)>=0){
+        foundGroup=g; found=a; break;
+      }
+    }
+    if(found) break;
+  }
+  if(!foundGroup){ alert('未找到'); return; }
+  currentGroup=foundGroup;
+  if(typeof selectGroup==='function') selectGroup(foundGroup);
+  setTimeout(()=>{
+    document.querySelectorAll('#panel-accounts [data-phone], #panel-accounts div').forEach(div=>{
+      const t=(div.innerText||'');
+      if(!/\+\d{6,}/.test(t)) return;
+      const hit=t.toLowerCase().replace(/[\s+]/g,'').indexOf(q)>=0;
+      div.style.outline = hit ? '2px solid #22c55e' : '';
+    });
+  }, 50);
+}
+
+function switchTab(name){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden'));
+  document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
+  document.getElementById('panel-'+name).classList.remove('hidden');
+
+  if(name==='join'){
+    fetch('/targets/join/jobs').then(r=>r.json()).then(list=>{
+      const run=(list||[]).find(j=>j.status==='running'||j.status==='pending');
+      if(run){ currentJoinJob=run.id; if(typeof startJoinPoll==='function') startJoinPoll(run.id); }
+    }).catch(()=>{});
+  }
+
+  document.getElementById('tab-'+name).classList.add('active');
+  if(name==='accounts')loadAccounts();
+  if(name==='apis')loadApis();
+  if(name==='proxies')loadProxies();
+  if(name==='targets'||name==='join'){loadTargets();loadAccounts();}
+  if(name==='add'){loadApis();loadProxies();}
+}
+
+async function loadAccounts(){
+  
+  const BAD_PROXY_IPS = ['168.143.238.250','198.104.201.254','204.1.105.195','192.220.250.125','198.87.100.109','165.254.210.237','204.1.123.22','204.1.104.254','198.65.17.19','198.87.101.173'];
+  window.proxyOkMap = window.proxyOkMap || {};
+
+  try{
+    const ps = await (await fetch('/pools/proxies')).json();
+    window.proxyOkMap = {};
+    (ps||[]).forEach(x=>{
+      const ip=(x.proxy_str||x.name||'').split(':')[0].replace('代理-','');
+      const bad = BAD_PROXY_IPS.some(b=> (x.name||'').includes(b) || (x.proxy_str||'').includes(b) || ip===b);
+      window.proxyOkMap[x.name] = !bad && (x.is_ok!==0 && x.is_ok!==false && x.is_ok!=='0');
+    });
+  }catch(e){}
+
+  const [accRes,proxyRes]=await Promise.all([fetch('/accounts/'),fetch('/pools/proxies')]);
+  const accounts=await accRes.json();
+  const proxies=await proxyRes.json();
+  allGroups={};
+  accounts.forEach(a=>{
+    const k=a.proxy_name||'未分配';
+    if(!allGroups[k])allGroups[k]=[];
+    allGroups[k].push(a);
+  });
+  proxies.forEach(p=>{if(!allGroups[p.name])allGroups[p.name]=[];});
+
+  const keys=Object.keys(allGroups);
+  const nav=document.getElementById('groupNav');
+  nav.innerHTML=keys.map((name,i)=>{
+    const list=allGroups[name];
+    const online=list.filter(a=>a.is_online).length;
+    const active=currentGroup===name?'active':'';
+    return `<div class="group-item rounded-lg px-3 py-2 ${active}" onclick="selectGroup('${name.replace(/'/g,"\\'")}')">
+      <div class="text-sm font-medium whitespace-nowrap overflow-visible ${ (window.proxyOkMap||{})[name]===false ? 'text-red-400' : 'text-green-400' }">${i+1}组 · ${name}</div>
+      <div class="text-xs text-gray-400">${list.length}/15 · 在线${online} · 死号${list.filter(a=>a.health_status==='dead').length} ·冻结${list.filter(a=>a.health_status==='frozen').length}</div>
+    </div>`;
+  }).join('')||'<p class="text-gray-500 text-sm">暂无线路</p>';
+
+  if(currentGroup && allGroups[currentGroup]) selectGroup(currentGroup);
+  else if(keys.length) selectGroup(keys[0]);
+  else document.getElementById('workArea').innerHTML='<p class="text-gray-500 text-sm">暂无数据</p>';
+
+  const opts=accounts.map(a=>`<option value="${a.session_name}">${a.name||a.phone}</option>`).join('');
+  const je=document.getElementById('joinAccounts');
+  if(je){je.innerHTML=opts;} if(typeof updateJoinCounts==='function') updateJoinCounts();
+}
+
+function selectGroup(name){
+  currentGroup=name;
+  document.querySelectorAll('.group-item').forEach(el=>el.classList.remove('active'));
+  // 重新高亮（简单方式：再渲染导航状态）
+  const list=allGroups[name]||[];
+  const online=list.filter(a=>a.is_online).length;
+  const remain=Math.max(0,15-list.length);
+
+  let html=`<div class="flex justify-between items-center mb-4 flex-wrap gap-2">
+    <div>
+      <h3 class="font-semibold ${ (window.proxyOkMap||{})[name]===false?'text-red-400':'text-green-400' }">${name}</h3>
+      <p class="text-xs text-gray-400">${list.length}/15 · 在线${online} · 死号${list.filter(a=>a.health_status==='dead').length} ·冻结${list.filter(a=>a.health_status==='frozen').length} · 剩余${remain}</p>
+    </div>
+    <div class="flex gap-2">
+      <button onclick="lineOnline('${name.replace(/'/g,"\\'")}')" class="text-sm px-3 py-1.5 bg-green-700 rounded">整组上线</button>
+      <button onclick="lineOffline('${name.replace(/'/g,"\\'")}')" class="text-sm px-3 py-1.5 bg-gray-600 rounded">整组下线</button>
+      <button onclick="checkHealthGroup('${name.replace(/'/g,"\\'")}')" class="text-sm px-3 py-1.5 bg-amber-700 rounded">检测活跃</button>
+    </div>
+  </div>
+  <div class="space-y-2">`;
+
+  if(!list.length) html+='<p class="text-gray-500 text-sm">该线路暂无水军号</p>';
+  else list.forEach(a=>{
+    html+=`<div class="bg-[#0f172a] rounded-lg overflow-hidden">
+      <div class="px-3 py-2 flex items-center justify-between gap-2">
+        <div>
+          <div class="text-sm">${a.name||a.phone}${a.is_monitor?' <span class="text-purple-400 text-xs">监</span>':''}</div>
+          <div class="text-xs ${a.is_online?'text-green-400':'text-red-400'}">${a.is_online?'在线':'离线'}${a.health_status==='frozen'?' ·冻结':a.health_status==='dead'?' ·已死':a.health_status==='active'?' ·活跃':''}</div>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="toggleChat('${a.session_name}','${(a.name||a.phone).replace(/'/g,'')}')" class="text-sm px-3 py-1 bg-blue-700 rounded">聊天</button>
+          <button onclick="openProfile('${a.session_name}','${(a.name||a.phone).replace(/'/g,'')}')" class="text-sm px-3 py-1 bg-gray-700 rounded">资料</button>
+<button onclick="deleteAccount(${a.id})" class="text-sm px-3 py-1 bg-red-800 rounded">删除</button>
+        </div>
+      </div>
+      <div id="chatbox-${a.session_name}" class="hidden border-t border-gray-700 p-3">
+        <div class="flex gap-2 mb-2">
+          <input id="search-${a.session_name}" placeholder="搜索对话" class="flex-1 px-2 py-1 rounded text-sm" oninput="filterDialogs('${a.session_name}')">
+          <button onclick="closeChatBox('${a.session_name}')" class="text-xs px-2 py-1 bg-gray-700 rounded">关闭</button>
+        </div>
+        <div id="dialogs-${a.session_name}" class="max-h-40 overflow-y-auto text-sm mb-2 space-y-1"></div>
+        <div id="msgs-${a.session_name}" class="max-h-52 overflow-y-auto text-sm mb-2 space-y-1 hidden"></div>
+        <div id="sendbox-${a.session_name}" class="hidden flex gap-2">
+          <input id="input-${a.session_name}" class="flex-1 px-2 py-1 rounded text-sm" placeholder="输入消息" onkeydown="if(event.key==='Enter')sendMsg('${a.session_name}')">
+          <button onclick="sendMsg('${a.session_name}')" class="btn-primary px-3 py-1 rounded text-sm">发送</button>
+        </div>
+      </div>
+    </div>`;
+  });
+  html+='</div>';
+  document.getElementById('workArea').innerHTML=html;
+
+  // 更新左侧高亮
+  document.querySelectorAll('.group-item').forEach(el=>{
+    if(el.textContent.includes(name.split('·').pop().trim()) || el.innerHTML.includes(name)) el.classList.add('active');
+  });
+}
+
+async function toggleChat(session,name){
+  const box=document.getElementById('chatbox-'+session);
+  document.querySelectorAll('[id^=chatbox-]').forEach(el=>{if(el.id!=='chatbox-'+session)el.classList.add('hidden');});
+  if(!box.classList.contains('hidden')){box.classList.add('hidden');return;}
+  box.classList.remove('hidden');
+  currentSession=session;
+  document.getElementById('dialogs-'+session).innerHTML='加载中...';
+  document.getElementById('msgs-'+session).classList.add('hidden');
+  document.getElementById('sendbox-'+session).classList.add('hidden');
+  try{await fetch('/accounts/'+session+'/reconnect',{method:'POST'});}catch(e){}
+  const res=await fetch('/chat/dialogs/'+session);
+  const data=await res.json();
+  if(data.detail){document.getElementById('dialogs-'+session).innerHTML='<p class="text-red-400">'+data.detail+'</p>';return;}
+  allDialogs=data.dialogs||[];
+  renderDialogs(session,allDialogs);
+}
+
+function renderDialogs(session,list){
+  const box=document.getElementById('dialogs-'+session);
+  if(!list.length){box.innerHTML='<p class="text-gray-500">暂无对话</p>';return;}
+  box.innerHTML=list.map(d=>`<div class="cursor-pointer hover:bg-[#1e293b] rounded px-2 py-1.5" onclick="openMsg('${session}',${d.id})">
+    <div class="font-medium truncate">${d.name}</div>
+    <div class="text-xs text-gray-500">${d.is_group||d.is_channel?'群组':'私聊'}${d.unread?' ·'+d.unread:''}</div>
+  </div>`).join('');
+}
+function filterDialogs(session){
+  const kw=(document.getElementById('search-'+session).value||'').toLowerCase();
+  renderDialogs(session,kw?allDialogs.filter(d=>d.name.toLowerCase().includes(kw)):allDialogs);
+}
+async function openMsg(session,chatId){
+  currentChatId=chatId;
+  const mbox=document.getElementById('msgs-'+session);
+  const sbox=document.getElementById('sendbox-'+session);
+  mbox.classList.remove('hidden');sbox.classList.remove('hidden');
+  mbox.innerHTML='加载中...';
+  const res=await fetch('/chat/messages/'+session+'/'+chatId);
+  const data=await res.json();
+  if(data.detail){mbox.innerHTML='<p class="text-red-400">'+data.detail+'</p>';return;}
+  if(!data.messages||!data.messages.length){mbox.innerHTML='<p class="text-gray-500">暂无消息</p>';return;}
+  mbox.innerHTML=data.messages.map(m=>{
+    const t=m.date?new Date(m.date).toLocaleString():'';
+    const body=m.text||(m.media_type?'['+m.media_type+']':'[媒体]');
+    return `<div class="flex ${m.out?'justify-end':'justify-start'}">
+      <div class="max-w-[85%] px-2 py-1 text-sm ${m.out?'chat-me':'chat-other'}">
+        <div>${body}</div>
+        <div class="text-[10px] text-gray-500 mt-0.5">${t}</div>
+      </div>
+    </div>`;
+  }).join('');
+  mbox.scrollTop=mbox.scrollHeight;
+}
+async function sendMsg(session){
+  const text=document.getElementById('input-'+session).value.trim();
+  if(!text||!currentChatId)return;
+  const res=await fetch('/chat/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_name:session,chat_id:currentChatId,text})});
+  if(res.ok){document.getElementById('input-'+session).value='';openMsg(session,currentChatId);}
+  else alert((await res.json()).detail||'失败');
+}
+function closeChatBox(session){document.getElementById('chatbox-'+session).classList.add('hidden');}
+
+async function lineOnline(proxyName){
+  if (!confirm('确定上线【' + proxyName + '】？')) return;
+  const res = await fetch('/accounts/line/online?proxy_name=' + encodeURIComponent(proxyName), {method:'POST'});
+  const d = await res.json();
+  if(!d.job_id){ alert(d.msg||JSON.stringify(d)); loadAccounts(); return; }
+  alert(d.msg||'已开始后台上线');
+  const poll=async()=>{
+    const s=await (await fetch('/accounts/line/online/status/'+d.job_id)).json();
+    if(s.status==='running'){ setTimeout(poll, 2000); return; }
+    alert((s.msg||'')+'
+失败:
+'+((s.failed||[]).slice(0,8).join('
+')));
+    loadAccounts();
+  };
+  poll();
+}
+async function lineOffline(name){
+  if(!confirm('下线整组?'))return;
+  const res=await fetch('/accounts/line/offline?proxy_name='+encodeURIComponent(name),{method:'POST'});
+  alert((await res.json()).msg||'已下线');
+  loadAccounts();
+}
+
+let profileSession = null;
+
+function openProfile(session, name) {
+  profileSession = session;
+  let modal = document.getElementById("profileModal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "profileModal";
+    modal.innerHTML = `
+      <div style="position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px">
+        <div style="background:#111827;border:1px solid #334155;border-radius:12px;padding:20px;max-width:480px;width:100%;max-height:90vh;overflow:auto">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h3 style="font-weight:600" id="profileModalTitle">修改资料</h3>
+            <button onclick="closeProfileModal()" style="background:#374151;padding:4px 10px;border-radius:6px;font-size:12px">关闭</button>
+          </div>
+          <input id="pfName" placeholder="昵称" style="width:100%;padding:8px;margin-bottom:8px;border-radius:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0">
+          <textarea id="pfAbout" placeholder="简介" rows="3" style="width:100%;padding:8px;margin-bottom:12px;border-radius:6px;background:#0f172a;border:1px solid #334155;color:#e2e8f0"></textarea>
+          <div style="margin-bottom:8px;font-size:13px;color:#94a3b8">图片库（点击选为头像）</div>
+          <div id="pfLibrary" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;max-height:160px;overflow:auto"></div>
+          <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+            <label style="background:#2563eb;padding:8px 12px;border-radius:6px;font-size:13px;cursor:pointer">
+              上传到图库 <input type="file" id="pfUpload" accept="image/*" multiple style="display:none" onchange="uploadToLibrary()">
+            </label>
+            <button onclick="saveProfileText()" style="background:#059669;padding:8px 12px;border-radius:6px;font-size:13px">保存昵称简介</button>
+          </div>
+          <p id="pfMsg" style="font-size:12px;color:#4ade80"></p>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  document.getElementById("profileModalTitle").textContent = "修改资料 - " + name;
+  document.getElementById("pfName").value = "";
+  document.getElementById("pfAbout").value = "";
+  document.getElementById("pfMsg").textContent = "";
+  modal.style.display = "block";
+  loadLibrary();
+}
+
+function closeProfileModal() {
+  const m = document.getElementById("profileModal");
+  if (m) m.style.display = "none";
+  profileSession = null;
+}
+
+async function loadLibrary() {
+  const box = document.getElementById("pfLibrary");
+  box.innerHTML = "加载中...";
+  try {
+    const d = await (await fetch("/chat/library")).json();
+    const files = d.files || [];
+    if (!files.length) {
+      box.innerHTML = '<span style="font-size:12px;color:#64748b">图库为空，请先上传</span>';
+      return;
+    }
+    box.innerHTML = files.map(f =>
+      `<img src="${f.url}" data-name="${f.name}" onclick="setPhotoFromLibrary('${f.name}')"
+        style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;cursor:pointer;border:2px solid transparent"
+        onmouseover="this.style.borderColor='#2563eb'" onmouseout="this.style.borderColor='transparent'">`
+    ).join("");
+  } catch(e) {
+    box.innerHTML = '<span style="color:#f87171">加载失败</span>';
+  }
+}
+
+async function uploadToLibrary() {
+  const files = document.getElementById("pfUpload").files;
+  if (!files || !files.length) return;
+  document.getElementById("pfMsg").textContent = "上传中 0/" + files.length;
+  let ok = 0, fail = 0;
+  for (let i = 0; i < files.length; i++) {
+    const form = new FormData();
+    form.append("file", files[i]);
+    try {
+      const res = await fetch("/chat/library/upload", { method: "POST", body: form });
+      const d = await res.json();
+      if (d.ok) ok++; else fail++;
+    } catch(e) { fail++; }
+    document.getElementById("pfMsg").textContent = "上传中 " + (i+1) + "/" + files.length;
+  }
+  document.getElementById("pfMsg").textContent = "完成：成功 " + ok + " 失败 " + fail;
+  document.getElementById("pfUpload").value = "";
+  loadLibrary();
+}
+
+async function setPhotoFromLibrary(filename) {
+  if (!profileSession) return;
+  if (!confirm("用这张图作为头像？")) return;
+  document.getElementById("pfMsg").textContent = "设置头像中...";
+  const form = new FormData();
+  form.append("session_name", profileSession);
+  form.append("filename", filename);
+  try {
+    await fetch("/accounts/" + profileSession + "/reconnect", { method: "POST" });
+  } catch(e) {}
+  const res = await fetch("/chat/profile/photo-from-library", { method: "POST", body: form });
+  const d = await res.json();
+  document.getElementById("pfMsg").textContent = d.ok ? "头像已更新" : (d.msg || "失败");
+}
+
+async function saveProfileText() {
+  if (!profileSession) return;
+  const first = document.getElementById("pfName").value.trim();
+  const about = document.getElementById("pfAbout").value.trim();
+  document.getElementById("pfMsg").textContent = "保存中...";
+  try {
+    await fetch("/accounts/" + profileSession + "/reconnect", { method: "POST" });
+  } catch(e) {}
+  const res = await fetch("/chat/profile/update", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_name: profileSession, first_name: first, about: about })
+  });
+  document.getElementById("pfMsg").textContent = res.ok ? "昵称简介已保存" : "保存失败";
+}
+
+
+async function deleteAccount(id){
+  if(!confirm('确定删除?'))return;
+  if((await fetch('/accounts/'+id,{method:'DELETE'})).ok)loadAccounts();
+}
+
+async function addAccount(){
+  const phone=document.getElementById('phone').value.trim();
+  const name=document.getElementById('name').value.trim();
+  const api_id=parseInt(document.getElementById('selectApi').value);
+  const proxy_id=parseInt(document.getElementById('selectProxy').value);
+  if(!phone||!api_id||!proxy_id)return alert('请填写完整');
+  const res=await fetch('/accounts/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone,name,api_id,proxy_id})});
+  const d=await res.json();
+  document.getElementById('addMsg').textContent=res.ok?'验证码已发送':(d.detail||JSON.stringify(d));
+  if(res.ok)document.getElementById('verifyPhone').value=phone;
+}
+async function verifyCode(){
+  const phone=document.getElementById('verifyPhone').value.trim();
+  const code=document.getElementById('code').value.trim();
+  const password=document.getElementById('password').value.trim()||null;
+  const res=await fetch('/accounts/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone,code,password})});
+  const d=await res.json();
+  document.getElementById('verifyMsg').textContent=res.ok?'登录成功':(d.detail||JSON.stringify(d));
+  if(res.ok)loadAccounts();
+}
+async function loadApis(){
+  const list=await(await fetch('/pools/apis')).json();
+  var _as=document.getElementById('apiPoolSummary');
+  if(_as){var u=list.reduce((s,a)=>s+(a.used||0),0);_as.textContent='API 共 '+list.length+' 条 · 号 '+u+' 个';}
+  document.getElementById('apiList').innerHTML=list.map(a=>`<div class="bg-[#0f172a] rounded px-3 py-2 flex items-center gap-2">
+<input type="checkbox" class="api-ck" value="${a.id}">
+<span class="flex-1">${a.name} · 已用${a.used||0} · 剩${a.remain!=null?a.remain:((a.cap||10)-(a.used||0))}</span>
+<button type="button" onclick="deleteApi(${a.id})" class="text-xs px-2 py-0.5 rounded bg-red-800">删除</button>
+</div>`).join('')||'<p class="text-gray-500">暂无</p>';
+  const sel=document.getElementById('selectApi');
+  if(sel)sel.innerHTML=list.filter(a=>a.remain>0).map(a=>`<option value="${a.id}">${a.name}（剩${a.remain}）</option>`).join('');
+}
+async function batchAddApis(){
+  const text=document.getElementById('apiBatchText').value.trim();
+  if(!text)return;
+  const d=await(await fetch('/pools/apis/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})})).json();
+  document.getElementById('apiMsg').textContent=`成功${d.success} 失败${d.failed_count}`;
+  loadApis();
+}
+async function loadProxies(){
+  const list=await(await fetch('/pools/proxies')).json();
+  var _ps=document.getElementById('proxyPoolSummary');
+  if(_ps){var u=list.reduce((s,p)=>s+(p.used||0),0);_ps.textContent='代理 共 '+list.length+' 条 · 号 '+u+' 个';}
+  document.getElementById('proxyList').innerHTML=list.map(p=>`<div class="bg-[#0f172a] rounded px-3 py-2 flex items-center gap-2">
+<input type="checkbox" class="proxy-ck" value="${p.id}">
+<span class="flex-1">${p.name} · 共${p.cap||p.capacity||15} · 已用${p.used||0} · 剩${(p.remain!=null?p.remain:((p.cap||15)-(p.used||0)))}</span>
+<button type="button" onclick="deleteProxy(${p.id},'${(p.name||'').replace(/'/g,'')}')" class="text-xs px-2 py-0.5 rounded bg-red-800">删除</button>
+</div>`).join('')||'<p class="text-gray-500">暂无</p>';
+  const sel=document.getElementById('selectProxy');
+  if(sel)sel.innerHTML=list.filter(p=>p.remain>0).map(p=>`<option value="${p.id}">${p.name}（剩${p.remain}）</option>`).join('');
+}
+async function batchAddProxies(){
+  const text=document.getElementById('proxyBatchText').value.trim();
+  if(!text)return;
+  const d=await(await fetch('/pools/proxies/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})})).json();
+  document.getElementById('proxyMsg').textContent=`成功${d.success} 失败${d.failed_count}`;
+  loadProxies();
+}
+async function addTarget(){
+  const name=document.getElementById('targetName').value.trim();
+  const link=document.getElementById('targetLink').value.trim();
+  if(!name||!link)return;
+  await fetch('/targets/',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,link})});
+  document.getElementById('targetMsg').textContent='已添加';loadTargets();
+}
+
+async function deleteTarget(id){
+  if(!confirm('删除该目标？不会让水军退群，只删面板记录')) return;
+  const r=await fetch('/targets/'+id,{method:'DELETE'});
+  if(!r.ok){alert(await r.text());return;}
+  loadTargets();
+}
+
+async function loadTargets(){
+  try{
+    const list=await(await fetch('/targets/')).json();
+    if(!Array.isArray(list)){
+      document.getElementById('targetList').innerHTML='<p class="text-red-400">加载失败</p>';
+      return;
+    }
+    document.getElementById('targetList').innerHTML=list.map(t=>`
+      <div class="bg-[#0f172a] rounded px-3 py-2 flex justify-between items-center gap-2">
+        <div>
+          <div class="text-sm">${t.name}${t.member_count!=null?' <span class="text-green-400 text-xs">'+t.member_count+'人</span>':''}</div>
+          <div class="text-xs text-gray-500">${t.link}</div>
+        </div>
+        <button onclick="refreshMembers(${t.id})" class="text-xs px-2 py-1 bg-gray-700 rounded shrink-0">刷新人数</button><button onclick="deleteTarget(${t.id})" class="text-xs px-2 py-1 bg-red-800 rounded ml-1">删除</button>
+      </div>
+    `).join('')||'<p class="text-gray-500">暂无</p>';
+    const sel=document.getElementById('joinTargets');
+    if(sel){
+      sel.innerHTML=list.map(t=>`<option value="${t.id}">${t.name}${t.member_count!=null?' · '+t.member_count+'人':''}</option>`).join('');
+      if(typeof updateJoinCounts==='function') updateJoinCounts();
+    }
+  }catch(e){
+    document.getElementById('targetList').innerHTML='<p class="text-red-400">加载失败</p>';
+  }
+}
+
+async function refreshMembers(id){
+  try{
+    const m=await(await fetch('/targets/'+id+'/members')).json();
+    if(m.members!=null) alert('当前人数: '+m.members);
+    else alert(m.msg||'查询失败');
+    loadTargets();
+  }catch(e){ alert('查询失败'); }
+}
+
+async function doLeave(){
+  const accounts=[...document.getElementById('joinAccounts').selectedOptions].map(o=>o.value);
+  const targetIds=[...document.getElementById('joinTargets').selectedOptions].map(o=>parseInt(o.value));
+  const interval=parseInt(document.getElementById('joinInterval')?.value||5);
+  if(!accounts.length||!targetIds.length)return alert('请选择水军和目标');
+  if(!confirm('确定让选中水军退出选中的群/频道？'))return;
+  const statusEl=document.getElementById('joinStatus');
+  if(statusEl) statusEl.innerHTML='<span class="text-yellow-400">退出中...</span>';
+  try{
+    const d=await(await fetch('/targets/leave',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_names:accounts.filter(s=>!window.allAccounts||(window.allAccounts.find(a=>a.session_name===s)||{}).is_online),target_ids:targetIds,interval:Math.min(interval,10)})
+    })).json();
+    document.getElementById('joinResult').textContent=JSON.stringify(d,null,2);
+    if(statusEl && d.details){
+      statusEl.innerHTML=d.details.map(r=>{
+        const ok=r.success;
+        return '<div class="'+(ok?'text-green-400':'text-red-400')+'">'+(ok?'✓':'✗')+' '+r.account+' → '+(r.msg||'')+'</div>';
+      }).join('');
+    }
+  }catch(e){
+    if(statusEl) statusEl.innerHTML='<span class="text-red-400">请求失败</span>';
+    document.getElementById('joinResult').textContent=String(e);
+  }
+}
+
+let currentJoinJob = null;
+let joinPollTimer = null;
+
+
+function updateJoinCounts(){
+  const acc=document.getElementById('joinAccounts');
+  const tgt=document.getElementById('joinTargets');
+  if(acc){
+    document.getElementById('joinAccCount').textContent=acc.options.length;
+    document.getElementById('joinAccSelected').textContent=acc.selectedOptions.length;
+  }
+  if(tgt){
+    document.getElementById('joinTargetCount').textContent=tgt.options.length;
+    document.getElementById('joinTargetSelected').textContent=tgt.selectedOptions.length;
+  }
+}
+
+
+async function setMonitor(session){
+  if(!confirm('将此号设为监听号（用于查询群人数，会保持连接）？')) return;
+  const res=await fetch('/accounts/'+session+'/set_monitor?enable=true',{method:'POST'});
+  const d=await res.json();
+  alert(d.msg||JSON.stringify(d));
+  loadAccounts();
+}
+
+
+async function importZip(){
+  const f=document.getElementById('zipFile').files[0];
+  if(!f) return alert('请选择 ZIP');
+  const fd=new FormData();
+  fd.append('file', f);
+  const apiEl=document.getElementById('selectApi');
+  const proxyEl=document.getElementById('selectProxy');
+  if(apiEl && apiEl.value) fd.append('api_id', apiEl.value);
+  if(proxyEl && proxyEl.value) fd.append('proxy_id', proxyEl.value);
+  const box=document.getElementById('zipResult');
+  if(box) box.textContent='上传中...';
+  try{
+    const startRes=await fetch('/accounts/import-zip/start',{method:'POST',body:fd});
+    const text=await startRes.text();
+    let d;
+    try{ d=JSON.parse(text); }catch(e){
+      if(box) box.textContent='返回不是JSON，请重新登录后再试';
+      return;
+    }
+    if(!d.job_id){ if(box) box.textContent=JSON.stringify(d,null,2); return; }
+    if(box) box.textContent='后台导入中 job='+d.job_id;
+    const poll=async()=>{
+      const s=await(await fetch('/accounts/import-zip/status/'+d.job_id)).json();
+      let t='状态:'+(s.status||'')+'\n成功 '+(s.success||0)+' / 死号 '+(s.dead||0)+' / 失败 '+(s.failed||0)+'\n'+(s.msg||'');
+      if(s.details&&s.details.length) t += '\n' + s.details.slice(-20).join(' | ');
+      if(box) box.textContent=t;
+      if(s.status==='running'||s.status==='pending') setTimeout(poll,3000);
+      else if(typeof loadAccounts==='function') loadAccounts();
+    };
+    poll();
+  }catch(e){ if(box) box.textContent=String(e); }
+}
+
+
+
+function toggleJoinAccounts(){
+  const sel=document.getElementById('joinAccounts');
+  if(!sel) return;
+  for(const o of sel.options) o.selected = true;
+  if(typeof updateJoinCounts==='function') updateJoinCounts();
+}
+function clearJoinAccounts(){
+  const sel=document.getElementById('joinAccounts');
+  if(!sel) return;
+  for(const o of sel.options) o.selected = false;
+  if(typeof updateJoinCounts==='function') updateJoinCounts();
+}
+
+async function doJoin(){
+  const accEl=document.getElementById('joinAccounts');
+  const tgtEl=document.getElementById('joinTargets');
+  const intEl=document.getElementById('joinInterval');
+  if(!accEl||!tgtEl){ alert('找不到选择框'); return; }
+  const session_names=[...accEl.selectedOptions].map(o=>o.value).filter(Boolean);
+  const target_ids=[...tgtEl.selectedOptions].map(o=>parseInt(o.value)).filter(n=>n);
+  const interval=parseInt((intEl&&intEl.value)||180);
+  if(!session_names.length){ alert('请选择水军'); return; }
+  if(!target_ids.length){ alert('请选择目标'); return; }
+  if(!confirm('开始加入 '+session_names.length+' 个号到 '+target_ids.length+' 个目标，间隔 '+interval+' 秒？')) return;
+  const box=document.getElementById('joinStatus')||document.getElementById('joinResult');
+  try{
+    const res=await fetch('/targets/join/start',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_names, target_ids, interval})
+    });
+    const text=await res.text();
+    let d; try{ d=JSON.parse(text); }catch(e){ alert('请重新登录'); return; }
+    if(box) box.textContent=JSON.stringify(d,null,2);
+    if(d.job_id){ currentJoinJob=d.job_id; if(typeof startJoinPoll==='function') startJoinPoll(d.job_id); }
+    else alert(d.msg||JSON.stringify(d));
+  }catch(e){ alert('启动失败 '+e); }
+}
+
+function startJoinPoll(){
+  if(joinPollTimer) clearInterval(joinPollTimer);
+  joinPollTimer=setInterval(pollJoinJob, 3000);
+  pollJoinJob();
+}
+
+async function pollJoinJob(){
+  if(!currentJoinJob) return;
+  try{
+    const j=await(await fetch('/targets/join/status/'+currentJoinJob)).json();
+    const box=document.getElementById('joinStatus')||document.getElementById('joinResult');
+    const done=j.done||0, total=j.total||0, ok=j.success||0, fail=j.failed||0;
+    if(box) box.textContent='状态:'+j.status+' · 进度 '+done+'/'+total+' · 成功'+ok+' 失败'+fail+' · '+(j.current||'');
+    const list=document.getElementById('joinLiveList');
+    if(list){
+      const details=j.details||[];
+      const waiting=Math.max(0, total-details.length);
+      let html='<div class="text-xs text-gray-400 mb-2">等待 '+waiting+' · 已处理 '+details.length+'</div>';
+      html += details.slice().reverse().slice(0,80).map(d=>{
+        const msg=(d.msg||d.message||'').toString();
+        let st='等待', color='text-gray-400';
+        if(d.success===true || msg.indexOf('加入成功')>=0){ st='已加入'; color='text-green-400'; }
+        if(msg.indexOf('已经是成员')>=0 || msg.indexOf('已在')>=0 || msg.indexOf('ALREADY')>=0){ st='已在群'; color='text-blue-400'; }
+        if(d.success===false){ st='失败'; color='text-red-400'; }
+        const name=d.session_name||d.phone||d.account||'';
+        return '<div class="flex justify-between px-2 py-1 bg-[#0f172a] rounded"><span>'+name+'</span><span class="'+color+'">'+st+'</span></div>';
+      }).join('');
+      list.innerHTML=html;
+    }
+  }catch(e){}
+}
+
+async function stopJoinJob(){
+  if(!currentJoinJob) return;
+  await fetch('/targets/join/stop/'+currentJoinJob,{method:'POST'});
+  alert('已请求停止');
+}
+loadAccounts();
+
+function proxySelectAll(on){
+  document.querySelectorAll('.proxy-ck').forEach(c=>c.checked=!!on);
+}
+function selectedProxyIds(){
+  return [...document.querySelectorAll('.proxy-ck:checked')].map(c=>parseInt(c.value)).filter(Boolean);
+}
+async function deleteProxy(id, name){
+  if(!confirm('删除代理【'+(name||id)+'】？有号的线路不会删')) return;
+  const r=await fetch('/pools/proxies/'+id,{method:'DELETE'});
+  let d={}; try{d=await r.json()}catch(e){return alert('失败')}
+  if(!r.ok) return alert(d.detail||JSON.stringify(d));
+  if(typeof loadProxies==='function') loadProxies();
+}
+async function deleteSelectedProxies(){
+  const ids=selectedProxyIds();
+  if(!ids.length) return alert('先勾选');
+  if(!confirm('删除选中 '+ids.length+' 条？有号的会跳过')) return;
+  const r=await fetch('/pools/proxies/delete-batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
+  const d=await r.json();
+  alert((d.msg||'')+'\n跳过: '+(d.skipped||[]).join('\n'));
+  if(typeof loadProxies==='function') loadProxies();
+}
+async function deleteAllProxies(){
+  const ids=[...document.querySelectorAll('.proxy-ck')].map(c=>parseInt(c.value)).filter(Boolean);
+  if(!ids.length) return alert('没有代理');
+  if(!confirm('全部删除 '+ids.length+' 条？有号的线路会跳过')) return;
+  const r=await fetch('/pools/proxies/delete-batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
+  const d=await r.json();
+  alert((d.msg||'')+'\n跳过: '+(d.skipped||[]).join('\n'));
+  if(typeof loadProxies==='function') loadProxies();
+}
+
+</script>
+
+<script>
+window.rebalanceIp = async function(){
+  try{
+    if(!confirm('把库里全部水军号均匀分配到当前这些IP？')) return;
+    const r = await fetch('/accounts/rebalance-ip', {method:'POST', credentials:'same-origin'});
+    const t = await r.text();
+    let d; try{ d=JSON.parse(t) }catch(e){ alert('返回不是JSON HTTP '+r.status+'\n'+t.slice(0,200)); return; }
+    alert(d.msg || JSON.stringify(d));
+    if(typeof loadProxies==='function') loadProxies();
+    if(typeof loadAccounts==='function') loadAccounts();
+  }catch(e){
+    alert('分配失败: '+e);
+  }
+};
+</script>
+
+<script src="/static/notes.js?v=2"></script>
+</body>
+</html>

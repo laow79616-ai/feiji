@@ -127,7 +127,7 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
   <div class="w-80 shrink-0">
     <div class="card rounded-xl p-3 sticky top-20">
       <div class="flex justify-between items-center mb-3">
-        <span class="font-semibold text-sm">线路分组</span></div>
+        <span class="font-semibold text-sm">线路分组 <span id="accTotalCount" class="text-xs text-sky-300 font-normal">· 共 0 个</span></span></div>
 <input id="accSearch" onkeydown="if(event.key==='Enter')searchAccount()"  id="lineSearch" type="text" placeholder="搜索线路 / 号码 / 名称" class="w-full mt-2 mb-2 px-2 py-1 rounded text-sm bg-[#0f172a] text-white" oninput="filterLines()" id="accSearch" onkeydown="if(event.key==='Enter')searchAccount()">
 <div style="display:none"><span></span>
         <button onclick="loadAccounts()" class="text-xs px-2 py-1 bg-gray-800 rounded">刷新</button>
@@ -245,6 +245,31 @@ input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0}
 </div>
 
 <script>
+
+function updateAccTotal(list){
+  const arr = Array.isArray(list) ? list : (window.allAccounts||window.accounts||[]);
+  const el = document.getElementById('accTotalCount');
+  if(el) el.textContent = '· 共 ' + arr.length + ' 个';
+}
+const _fetch = window.fetch;
+window.fetch = async function(){
+  const res = await _fetch.apply(this, arguments);
+  try{
+    const url = String(arguments[0]||'');
+    if(url.indexOf('/accounts/')>=0 && (!url.split('?')[0].replace(/\/+$/,'').split('/').pop() || url==='/accounts/' || url.endsWith('/accounts') || /\/accounts\/?\?/.test(url) || url==='/accounts/' || url.indexOf('/accounts/?')>=0 || url==='/accounts')){
+      const clone = res.clone();
+      clone.json().then(d=>{
+        const list = Array.isArray(d) ? d : (d.accounts||d.items||d.data||[]);
+        if(Array.isArray(list) && list.length>=0 && (list[0]?.phone || list[0]?.session_name || list.length===0)){
+          window.allAccounts = list;
+          updateAccTotal(list);
+        }
+      }).catch(()=>{});
+    }
+  }catch(e){}
+  return res;
+};
+
 let allGroups={}, currentGroup=null, currentSession=null, currentChatId=null, allDialogs=[];
 
 
@@ -450,6 +475,9 @@ async function deleteSelectedAccs(){
   alert("已删 "+(d.deleted||0));
   loadAccounts();
 }
+
+
+
 
 function switchTab(name){
   if(name==='apis' && typeof loadApis==='function') loadApis();

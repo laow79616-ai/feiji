@@ -167,27 +167,35 @@ async def _run_join_job(job_id: str, session_names: list, links: list, interval:
         print("JOIN任务异常", job_id, e)
         return
 
-async def _run_join_job_inner(job_id: str, session_names: list, links: list, interval: int):
 
-    """一组代理上线 → 加入 → 下线 → 下一组。跳过死号/冻结/红线。"""
+async def _run_join_job_inner(job_id: str, session_names: list, links: list, interval: int):
+    """按 IP 线路轮询：每组每次只出 1 个号加入，加完立刻换下一组。"""
     import asyncio
-    from collections import defaultdict
+    from collections import defaultdict, deque
     from sqlalchemy import select
     from models import Account, Proxy
     from clients.manager import ClientManager, is_dead_session_error, clients
     from database import get_db
 
-    global JOIN_JOBS
-    if 'JOIN_JOBS' not in globals() or JOIN_JOBS is None:
+    global JOIN_JOBS, join_jobs
+    if "JOIN_JOBS" not in globals() or JOIN_JOBS is None:
         JOIN_JOBS = {}
-    job = JOIN_JOBS.get(job_id)
+    if "join_jobs" not in globals() or join_jobs is None:
+        join_jobs = {}
+
+    job = JOIN_JOBS.get(job_id) or join_jobs.get(job_id)
     if not job:
-        JOIN_JOBS[job_id] = {"status":"running","done":0,"success":0,"failed":0,"details":[],"msg":"任务已重建"}
-        job = JOIN_JOBS[job_id]
-
+        job = {
+            "id": job_id, "status": "running", "done": 0, "success": 0,
+            "failed": 0, "details": [], "msg": "任务已重建", "stop": False,
+            "current": "",
+        }
+    JOIN_JOBS[job_id] = job
+    join_jobs[job_id] = job
     job["status"] = "running"
+    job["msg"] = "按IP组轮询启动"
+    wait_sec = max(int(interval or 5), 3)
 
-    # 取号与代理
     agen = get_db()
     db = await agen.__anext__()
     try:
@@ -201,7 +209,16 @@ async def _run_join_job_inner(job_id: str, session_names: list, links: list, int
         except Exception:
             pass
 
+    order = []
+    seen = set()
+    for s in session_names:
+        seen.add(s)
+        order.append(s)
+    by_name = {a.session_name: a for a in accs}
+
     def is_red(acc):
+        if not acc:
+            return True
         hs = (getattr(acc, "health_status", None) or "").lower()
         if hs in ("dead", "frozen", "bad"):
             return True
@@ -209,15 +226,21 @@ async def _run_join_job_inner(job_id: str, session_names: list, links: list, int
             return True
         return False
 
-    groups = defaultdict(list)
+    groups = defaultdict(deque)
+    pid_order = []
     skipped = []
-    for a in accs:
-        if is_red(a):
-            skipped.append(a.session_name)
+    for s in order:
+        acc = by_name.get(s)
+        if is_red(acc):
+            skipped.append(s)
             continue
-        groups[a.proxy_id].append(a)
+        pid = getattr(acc, "proxy_id", None) or 0
+        if pid not in groups:
+            pid_order.append(pid)
+        groups[pid].append(acc)
 
-    job["msg"] = f"跳过红号 {len(skipped)}，共 {len(groups)} 组调度"
+    skip_sessions = set(skipped)
+    job["msg"] = f"跳过红号 {len(skipped)}，共 {len(pid_order)} 条IP组轮询"
     job.setdefault("details", [])
 
     async def drop(session_name):
@@ -228,61 +251,73 @@ async def _run_join_job_inner(job_id: str, session_names: list, links: list, int
                 pass
             clients.pop(session_name, None)
 
-    skip_sessions=set()
-    from collections import deque
-    queues = {pid: deque(mem) for pid, mem in groups.items()}
-    pids = list(groups.keys())
-    while any(queues[pid] for pid in pids):
+    async def remember(session_name, link, ok, msg):
+        try:
+            memory_put(session_name, link, "joined" if ok else "failed", msg)
+        except Exception:
+            pass
+
+    while any(groups[pid] for pid in pid_order):
         if job.get("stop"):
             job["status"] = "stopped"
             job["msg"] = "已停止"
+            JOIN_JOBS[job_id] = job
+            join_jobs[job_id] = job
             return
-        for proxy_id in pids:
+        for pid in pid_order:
             if job.get("stop"):
                 job["status"] = "stopped"
                 job["msg"] = "已停止"
+                JOIN_JOBS[job_id] = job
+                join_jobs[job_id] = job
                 return
-            if not queues.get(proxy_id):
+            q = groups.get(pid)
+            if not q:
                 continue
-            acc = queues[proxy_id].popleft()
-            px = proxies.get(proxy_id)
-            proxy_str = px.proxy_str if px else None
+            acc = q.popleft()
             session_name = acc.session_name
             if session_name in skip_sessions:
                 continue
-            job["msg"] = f"轮询 {getattr(px,'name',proxy_id)} · {session_name}"
-            # 上线（带代理，禁止裸连）
+            px = proxies.get(pid)
+            proxy_str = px.proxy_str if px else None
+            line_name = getattr(px, "name", None) or str(pid)
+            job["msg"] = f"轮询 {line_name} · {session_name}"
+            job["current"] = session_name
+
             try:
                 await ClientManager.reconnect(session_name, proxy_str)
             except Exception as e:
                 msg = str(e)
-                ok = False
-                already = False
                 if "two different IP" in msg:
                     msg = "session双IP已作废"
+                    skip_sessions.add(session_name)
                 job["failed"] = job.get("failed", 0) + 1
                 job["done"] = job.get("done", 0) + 1
                 job["details"].append(f"{session_name} 连接失败 {msg}")
                 await drop(session_name)
-                await asyncio.sleep(max(int(interval or 5), 3))
+                JOIN_JOBS[job_id] = job
+                join_jobs[job_id] = job
+                await asyncio.sleep(wait_sec)
                 continue
 
             for link in links:
                 if job.get("stop"):
                     break
                 job["current"] = f"{session_name} -> {link}"
+                job["msg"] = f"轮询 {line_name} · {session_name}"
                 try:
                     r = await ClientManager.join_group_or_channel(session_name, link)
-                    msg = (r.get("msg") if isinstance(r, dict) else str(r)) or ""
+                    if not isinstance(r, dict):
+                        r = {"success": False, "msg": str(r), "already": False}
+                    msg = r.get("msg") or ""
                     if is_dead_session_error(msg):
                         skip_sessions.add(session_name)
-                        if isinstance(r, dict):
-                            r["msg"] = "废号已跳过: " + msg[:160]
-                            r["skip"] = True
+                        r["msg"] = "废号已跳过: " + msg[:160]
+                        r["skip"] = True
+                        r["success"] = False
                 except Exception as e:
                     r = {"success": False, "msg": str(e), "already": False}
-                ok = bool(r.get("success"))
-                already = bool(r.get("already"))
+                ok = bool(r.get("success") or r.get("already"))
                 msg = r.get("msg") or ""
                 if ok:
                     job["success"] = job.get("success", 0) + 1
@@ -290,33 +325,21 @@ async def _run_join_job_inner(job_id: str, session_names: list, links: list, int
                     job["failed"] = job.get("failed", 0) + 1
                 job["done"] = job.get("done", 0) + 1
                 job["details"].append(f"{session_name} {link} {msg}")
-                try:
-                    from routers.targets import save_membership
-                except Exception:
-                    save_membership = None
-                # 写记忆（有则用现有函数）
-                try:
-                    agen2 = get_db()
-                    db2 = await agen2.__anext__()
-                    try:
-                        from models import JoinMemory
-                    except Exception:
-                        JoinMemory = None
-                    if JoinMemory:
-                        st = "joined" if ok else "failed"
-                        db2.add(JoinMemory(session_name=session_name, link=link, status=st, msg=msg[:300]))
-                        await db2.commit()
-                    await agen2.aclose()
-                except Exception:
-                    pass
-                await asyncio.sleep(max(int(interval or 5), 3))
+                await remember(session_name, link, ok, msg)
+                JOIN_JOBS[job_id] = job
+                join_jobs[job_id] = job
+                await asyncio.sleep(wait_sec)
+                if session_name in skip_sessions:
+                    break
 
             await drop(session_name)
 
-        job["msg"] = f"已下线 {getattr(px,'name',proxy_id)}"
-
     job["status"] = "finished"
-    job["msg"] = "全部组调度完成"
+    job["msg"] = "全部IP组轮询完成"
+    job["current"] = ""
+    JOIN_JOBS[job_id] = job
+    join_jobs[job_id] = job
+
 
 
 @router.post("/join/start")

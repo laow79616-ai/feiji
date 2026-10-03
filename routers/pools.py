@@ -9,7 +9,52 @@ from models import ApiCredential, Proxy, Account
 
 router = APIRouter(prefix="/pools", tags=["API与代理池"])
 
-MAX_PER_POOL = 10
+API_CAP = 50
+MAX_PER_POOL = 10  # API 每条仍 10
+PROXY_CAP = 100  # 每条代理 100 个号
+
+MAX_PER_LINE = 100
+
+async def _spread_accounts_off_proxy(db, proxy_id: int):
+    """把某条 IP 上的号摊到其它未满线路；摊不完的 proxy_id 置空。"""
+    from sqlalchemy import select, func, update
+    from models import Proxy, Account
+
+    accs = (await db.execute(select(Account).where(Account.proxy_id == proxy_id))).scalars().all()
+    if not accs:
+        return {"moved": [], "unassigned": [], "left": 0}
+
+    others = (await db.execute(select(Proxy).where(Proxy.id != proxy_id).order_by(Proxy.id))).scalars().all()
+    slots = []
+    for px in others:
+        used = (await db.execute(
+            select(func.count()).select_from(Account).where(Account.proxy_id == px.id)
+        )).scalar() or 0
+        remain = MAX_PER_LINE - int(used)
+        if remain > 0:
+            slots.append([px, remain])
+
+    moved, unassigned = [], []
+    si = 0
+    for acc in accs:
+        placed = False
+        while si < len(slots):
+            px, remain = slots[si]
+            if remain <= 0:
+                si += 1
+                continue
+            acc.proxy_id = px.id
+            slots[si][1] = remain - 1
+            moved.append(f"{acc.phone or acc.session_name}->{px.name}")
+            placed = True
+            break
+        if not placed:
+            acc.proxy_id = None
+            unassigned.append(acc.phone or acc.session_name)
+    return {"moved": moved, "unassigned": unassigned, "left": len(unassigned)}
+
+
+
 
 
 # ========== API 池 ==========
@@ -50,6 +95,8 @@ async def list_apis(db: AsyncSession = Depends(get_db)):
             "api_id": a.api_id,
             "api_hash": (a.api_hash[:8] + "...") if getattr(a, "api_hash", None) else "",
             "used": int(used_map.get(a.id, 0)),
+            "cap": API_CAP,
+            "remain": API_CAP - int(used_map.get(a.id, 0)),
         })
     return out
 
@@ -157,26 +204,27 @@ async def list_proxies(db: AsyncSession = Depends(get_db)):
             "group_no": getattr(p, "group_no", None),
             "used": count,
             "is_ok": bool(getattr(p,"is_ok",1)),
-            "remain": MAX_PER_POOL - count
+            "cap": PROXY_CAP, "remain": PROXY_CAP - count
         })
     return data
 
 
 @router.delete("/proxies/{proxy_id}")
 async def delete_proxy(proxy_id: int, db: AsyncSession = Depends(get_db)):
-    count_result = await db.execute(
-        select(func.count()).select_from(Account).where(Account.proxy_id == proxy_id)
-    )
-    if count_result.scalar() > 0:
-        raise HTTPException(400, "该代理下还有水军号，无法删除")
-    
     result = await db.execute(select(Proxy).where(Proxy.id == proxy_id))
     proxy = result.scalar_one_or_none()
     if not proxy:
         raise HTTPException(404, "不存在")
+    spread = await _spread_accounts_off_proxy(db, proxy_id)
     await db.delete(proxy)
     await db.commit()
-    return {"success": True}
+    return {
+        "success": True,
+        "ok": True,
+        "moved": spread.get("moved", []),
+        "unassigned": spread.get("unassigned", []),
+        "msg": f"已删线路，转走 {len(spread.get('moved', []))} 个，未分配 {len(spread.get('unassigned', []))} 个",
+    }
 
 
 class ProxyBatchCreate(BaseModel):
@@ -230,7 +278,7 @@ async def delete_proxy(proxy_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(404, "代理不存在")
     cnt = (await db.execute(select(func.count()).select_from(Account).where(Account.proxy_id == proxy_id))).scalar() or 0
     if cnt:
-        raise HTTPException(400, f"该线路还有 {cnt} 个号，先删号或换线再删代理")
+        pass  # 改为摊号后删除
     await db.delete(p)
     await db.commit()
     return {"ok": True, "id": proxy_id}
@@ -361,3 +409,43 @@ async def get_proxy_notes():
     rows = con.execute("SELECT name, IFNULL(note,'') FROM proxies").fetchall()
     con.close()
     return {n: (note or "") for n, note in rows}
+
+
+@router.delete("/proxies/{proxy_id}")
+async def delete_proxy_spread(proxy_id: int, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select
+    from models import Proxy
+    r = await db.execute(select(Proxy).where(Proxy.id == proxy_id))
+    p = r.scalar_one_or_none()
+    if not p:
+        raise HTTPException(404, "代理不存在")
+    spread = await _spread_accounts_off_proxy(db, proxy_id)
+    await db.delete(p)
+    await db.commit()
+    return {
+        "ok": True,
+        "id": proxy_id,
+        "name": p.name,
+        "moved": spread["moved"],
+        "unassigned": spread["unassigned"],
+        "msg": f"已删线路，转走 {len(spread['moved'])} 个，未分配 {len(spread['unassigned'])} 个",
+    }
+
+@router.post("/proxies/delete-batch")
+async def delete_proxies_batch_spread(req: ProxyIds, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select
+    from models import Proxy
+    ok, detail = [], []
+    for pid in req.ids or []:
+        r = await db.execute(select(Proxy).where(Proxy.id == pid))
+        p = r.scalar_one_or_none()
+        if not p:
+            detail.append(f"{pid}:不存在")
+            continue
+        spread = await _spread_accounts_off_proxy(db, pid)
+        await db.delete(p)
+        ok.append(p.name)
+        detail.append(f"{p.name}:转走{len(spread['moved'])} 未分配{len(spread['unassigned'])}")
+    await db.commit()
+    return {"deleted": ok, "detail": detail, "msg": f"已删{len(ok)}条，号已摊到其它未满线路"}
+

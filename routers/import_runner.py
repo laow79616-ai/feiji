@@ -1,3 +1,4 @@
+PROXY_CAP = 100
 import os, json, shutil, zipfile, asyncio
 from datetime import datetime
 from sqlalchemy import select, func
@@ -5,7 +6,7 @@ from models import Account, ApiCredential, Proxy
 
 SESSIONS = "/opt/telegram_manager/sessions"
 
-MAX_PER_LINE = 15
+MAX_PER_LINE = 100
 
 async def _load_line_counts(db):
     r = await db.execute(select(Proxy))
@@ -156,7 +157,7 @@ async def run_zip_import(db, zip_path, job, proxy_id=None, api_id=None, proxy_id
                 pid = _pick_line(counts)
                 if not pid:
                     job['failed'] += 1
-                    job['details'].append(f'{phone} 所有线路已满15')
+                    job['details'].append(f'{phone} 所有线路已满100')
                     continue
                 st, msg = await import_one(db, phone, v["session"], meta, pid, api_id)
                 if st=='ok':

@@ -16,7 +16,9 @@ from clients.manager import ClientManager
 
 router = APIRouter(prefix="/accounts", tags=["水军管理"])
 
-MAX_PER_POOL = 10
+API_CAP = 50
+MAX_PER_POOL = API_CAP  # API
+PROXY_CAP = 100  # 每条代理
 
 
 class AddAccountRequest(BaseModel):
@@ -44,8 +46,8 @@ async def add_account(req: AddAccountRequest, db: AsyncSession = Depends(get_db)
     api_count = await db.execute(
         select(func.count()).select_from(Account).where(Account.api_id == req.api_id)
     )
-    if api_count.scalar() >= MAX_PER_POOL:
-        raise HTTPException(400, f"该 API 已绑定 {MAX_PER_POOL} 个水军号，已达上限")
+    if api_count.scalar() >= API_CAP:
+        raise HTTPException(400, f"该 API 已绑定 {API_CAP} 个水军号，已达上限")
 
     # 检查代理是否存在且未满
     proxy_result = await db.execute(select(Proxy).where(Proxy.id == req.proxy_id))
@@ -56,8 +58,8 @@ async def add_account(req: AddAccountRequest, db: AsyncSession = Depends(get_db)
     proxy_count = await db.execute(
         select(func.count()).select_from(Account).where(Account.proxy_id == req.proxy_id)
     )
-    if proxy_count.scalar() >= MAX_PER_POOL:
-        raise HTTPException(400, f"该代理已绑定 {MAX_PER_POOL} 个水军号，已达上限")
+    if proxy_count.scalar() >= PROXY_CAP:
+        raise HTTPException(400, f"该代理已绑定 {PROXY_CAP} 个水军号，已达上限")
 
     # 检查手机号是否重复
     result = await db.execute(select(Account).where(Account.phone == req.phone))
@@ -376,7 +378,7 @@ async def import_zip(
     proxy_id: list[int] | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """ZIP导入：先检测活跃，死号不导入；自动分配到未满10的代理"""
+    """ZIP导入：先检测活跃，死号不导入；自动分配到未满100的代理"""
     if not file.filename.lower().endswith(".zip"):
         raise HTTPException(400, "请上传 zip 文件")
 
@@ -398,7 +400,7 @@ async def import_zip(
         for p in proxies:
             cr = await db.execute(select(Account).where(Account.proxy_id == p.id))
             used = len(list(cr.scalars().all()))
-            if used < 15:
+            if used < PROXY_CAP:
                 out.append((p, used))
         return out
 
@@ -423,7 +425,7 @@ async def import_zip(
             try:
                 slots = await proxy_slots()
                 if not slots:
-                    failed.append(f"{base}: 所有代理已满(每组10个)")
+                    failed.append(f"{base}: 所有代理已满(每组100个)")
                     break
 
                 json_path = None
@@ -470,7 +472,7 @@ async def import_zip(
                     p2 = pr.scalar_one_or_none()
                     if p2:
                         cr = await db.execute(select(Account).where(Account.proxy_id == p2.id))
-                        if len(list(cr.scalars().all())) < 10:
+                        if len(list(cr.scalars().all())) < PROXY_CAP:
                             proxy = p2
 
                 status, msg = "unknown", ""
@@ -655,9 +657,9 @@ async def assign_proxy(req: AssignProxyReq, db: AsyncSession = Depends(get_db)):
     if not proxy:
         return {"ok": False, "msg": "线路不存在"}
     used = (await db.execute(select(Account).where(Account.proxy_id == proxy.id))).scalars().all()
-    remain = 10 - len(used)
+    remain = PROXY_CAP - len(used)
     if remain <= 0:
-        return {"ok": False, "msg": "该线路已满10个"}
+        return {"ok": False, "msg": "该线路已满100个"}
     ok, fail = [], []
     names = req.session_names[:remain]
     extra_cnt = len(req.session_names) - len(names)

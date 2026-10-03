@@ -1,3 +1,4 @@
+import asyncio
 PROXY_CAP = 100
 import os, json, shutil, zipfile, asyncio
 from datetime import datetime
@@ -93,11 +94,34 @@ async def import_one(db, phone, sess_src, meta, proxy_id, api_id):
         except Exception:
             pass
     except Exception as e:
-        try:
-            os.remove(dest)
-        except Exception:
-            pass
-        return "dead", f"{phone} 无法上线: {e}"
+        msg = str(e)
+        if "database is locked" in msg.lower() or "locked" in msg.lower():
+            for _ in range(5):
+                await asyncio.sleep(2)
+                try:
+                    await ClientManager.reconnect(session_name, proxy_str)
+                    cl = await ClientManager.get_client(session_name)
+                    me = await cl.get_me()
+                    if me:
+                        try:
+                            await cl.disconnect()
+                        except Exception:
+                            pass
+                        break
+                except Exception as e2:
+                    msg = str(e2)
+                    if "database is locked" not in msg.lower() and "locked" not in msg.lower():
+                        break
+            else:
+                return "fail", f"{phone} 数据库忙，稍后重试: {msg}"
+            if "database is locked" in msg.lower() or "locked" in msg.lower():
+                return "fail", f"{phone} 数据库忙，稍后重试: {msg}"
+        else:
+            try:
+                os.remove(dest)
+            except Exception:
+                pass
+            return "dead", f"{phone} 无法上线: {msg}"
     acc = Account(
         phone=phone,
         name=str((meta or {}).get("first_name") or getattr(me,"first_name",None) or phone),
